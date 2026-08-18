@@ -27,21 +27,24 @@ docker compose up -d --build
 
 GitHub 仓库：https://github.com/tyrantcwj/HAPowerStats
 
-也可以直接使用已发布镜像（需能访问 ghcr）：
+也可以直接使用已发布镜像。国内拉取 GHCR 可用 DaoCloud 加速：
 
 ```yaml
 services:
   electricity-monitor:
-    image: ghcr.io/tyrantcwj/hapowerstats:latest
+    image: docker.m.daocloud.io/ghcr.io/tyrantcwj/hapowerstats:latest
     container_name: electricity-monitor
     restart: unless-stopped
     ports:
       - "5000:5000"
     volumes:
       - ./data/electricity_data:/app/electricity_data
+      - ./data/config:/app/config
     environment:
       - TZ=Asia/Shanghai
 ```
+
+若加速站不可用，把 `image` 改回 `ghcr.io/tyrantcwj/hapowerstats:latest`。
 
 启动：
 ```bash

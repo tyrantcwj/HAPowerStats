@@ -1,6 +1,12 @@
 services:
   electricity-monitor:
-    build: .
+    build:
+      context: .
+      args:
+        # 国内构建加速。若镜像站失效，可改成 docker.1ms.run/library/python:3.11-slim
+        BASE_IMAGE: docker.m.daocloud.io/library/python:3.11-slim
+        PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
+        APT_MIRROR: mirrors.aliyun.com
     image: electricity-monitor:latest
     container_name: electricity-monitor
     restart: unless-stopped
