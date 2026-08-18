@@ -397,7 +397,8 @@
             font-size: 0.9em;
         }
         
-        .form-row input {
+        .form-row input,
+        .form-row select {
             width: 100%;
             padding: 12px 15px;
             border: 1px solid rgba(255,255,255,0.2);
@@ -523,6 +524,7 @@
                     <span id="statusText">连接中...</span>
                 </span>
                 <span>最后更新: <span id="lastUpdate">--</span></span>
+                <span><a href="#" onclick="logout(); return false;" style="color:#00d4ff; text-decoration:none;">退出登录</a></span>
             </div>
         </header>
         
@@ -723,9 +725,23 @@
                         <input type="password" id="haToken" placeholder="在HA用户资料页面生成">
                         <div class="form-hint">HA左下角点击用户名 → 长期访问令牌 → 创建令牌</div>
                     </div>
+
+                    <div class="form-row">
+                        <label>功率实体 ID *</label>
+                        <input type="text" id="haPowerEntity" placeholder="例如: sensor.house_power">
+                        <div class="form-hint">必须是功率传感器（单位 W 或 kW）。保存 HA 地址和令牌后可从下方列表选择。</div>
+                    </div>
+
+                    <div class="form-row">
+                        <label>从 HA 选择功率实体</label>
+                        <select id="haEntitySelect" class="form-input" onchange="applyHaEntity(this.value)">
+                            <option value="">先保存地址和令牌，再点击加载</option>
+                        </select>
+                    </div>
                     
                     <div class="form-actions">
                         <button class="btn btn-primary" onclick="testHaConnection()">🔗 测试连接</button>
+                        <button class="btn btn-primary" onclick="loadHaEntities()">📋 加载实体</button>
                         <button class="btn btn-success" onclick="saveHaConfig()">💾 保存配置</button>
                     </div>
                     
@@ -758,6 +774,11 @@
                         <label>密码</label>
                         <input type="password" id="mqttPassword" placeholder="留空则不使用认证">
                     </div>
+
+                    <div class="form-row">
+                        <label>客户端 ID</label>
+                        <input type="text" id="mqttClientId" value="home_electricity_monitor">
+                    </div>
                     
                     <div class="form-actions">
                         <button class="btn btn-primary" onclick="testMqttConnection()">🔗 测试连接</button>
@@ -768,7 +789,7 @@
                     
                     <div class="form-row" style="margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
                         <div class="form-hint" style="color: #888;">
-                            💡 MQTT 是可选的。填写HA地址和令牌后，数据会通过API推送到HA，不依赖MQTT。
+                            💡 MQTT 可选。配置后可将统计结果以自动发现方式上报到 Home Assistant。功率采集本身走 HA REST API，不依赖 MQTT。
                         </div>
                     </div>
                 </div>
@@ -1363,11 +1384,24 @@
         // =============================================================================
         // HA配置管理
         // =============================================================================
+        function logout() {
+            fetch('/api/auth/logout', { method: 'POST' })
+                .finally(() => { location.href = '/login'; });
+        }
+
         function loadHaConfig() {
             fetch('/api/config/ha')
-                .then(response => response.json())
+                .then(response => {
+                    if (response.status === 401) {
+                        location.href = '/login';
+                        return null;
+                    }
+                    return response.json();
+                })
                 .then(data => {
+                    if (!data) return;
                     document.getElementById('haUrl').value = data.url || '';
+                    document.getElementById('haPowerEntity').value = data.power_entity_id || '';
                     if (data.token_set) {
                         document.getElementById('haToken').placeholder = '已设置，留空则保持不变';
                     }
@@ -1376,18 +1410,48 @@
                     console.error('加载HA配置失败:', error);
                 });
         }
+
+        function applyHaEntity(entityId) {
+            if (entityId) {
+                document.getElementById('haPowerEntity').value = entityId;
+            }
+        }
+
+        function loadHaEntities() {
+            const select = document.getElementById('haEntitySelect');
+            select.innerHTML = '<option value="">正在加载...</option>';
+            fetch('/api/config/ha/entities')
+                .then(response => response.json().then(data => ({ ok: response.ok, data })))
+                .then(({ ok, data }) => {
+                    if (!ok) {
+                        select.innerHTML = '<option value="">加载失败</option>';
+                        alert(data.error || '加载实体失败，请先保存 HA 地址和令牌');
+                        return;
+                    }
+                    const entities = data.entities || [];
+                    if (entities.length === 0) {
+                        select.innerHTML = '<option value="">未找到功率类实体</option>';
+                        return;
+                    }
+                    const current = document.getElementById('haPowerEntity').value;
+                    select.innerHTML = '<option value="">请选择功率实体</option>' + entities.map(item => {
+                        const selected = item.entity_id === current ? ' selected' : '';
+                        return `<option value="${item.entity_id}"${selected}>${item.name} (${item.entity_id}) ${item.state} ${item.unit}</option>`;
+                    }).join('');
+                })
+                .catch(error => {
+                    select.innerHTML = '<option value="">加载失败</option>';
+                    alert('加载实体失败: ' + error.message);
+                });
+        }
         
         function testHaConnection() {
             const url = document.getElementById('haUrl').value.trim();
             const token = document.getElementById('haToken').value;
+            const powerEntity = document.getElementById('haPowerEntity').value.trim();
             
             if (!url) {
                 alert('请输入HA地址');
-                return;
-            }
-            
-            if (!token) {
-                alert('请输入访问令牌');
                 return;
             }
             
@@ -1403,7 +1467,8 @@
                 },
                 body: JSON.stringify({
                     url: url,
-                    token: token
+                    token: token,
+                    power_entity_id: powerEntity
                 })
             })
             .then(response => response.json())
@@ -1425,9 +1490,14 @@
         function saveHaConfig() {
             const url = document.getElementById('haUrl').value.trim();
             const token = document.getElementById('haToken').value;
+            const powerEntity = document.getElementById('haPowerEntity').value.trim();
             
             if (!url) {
                 alert('请输入HA地址');
+                return;
+            }
+            if (!powerEntity) {
+                alert('请填写功率实体 ID');
                 return;
             }
             
@@ -1438,13 +1508,14 @@
                 },
                 body: JSON.stringify({
                     url: url,
-                    token: token
+                    token: token,
+                    power_entity_id: powerEntity
                 })
             })
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    alert('✓ 配置已保存！\n\n请重启程序使配置生效。');
+                    alert('✓ HA 配置已保存。功率采集会使用新的实体，无需重启。');
                     document.getElementById('haToken').value = '';
                     document.getElementById('haToken').placeholder = '已设置，留空则保持不变';
                 } else {

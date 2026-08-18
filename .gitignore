@@ -20,6 +20,8 @@ electricity_data/
 ha_config.json
 mqtt_config.json
 mysql_config.json
+config/*
+!config/.gitkeep
 
 # Docker数据目录
 data/

@@ -1,20 +1,20 @@
-version: '3.8'
-
 services:
   electricity-monitor:
     build: .
-    image: electricity-monitor:latest
-    container_name: electricity-monitor
+    image: hapowerstats:latest
+    container_name: hapowerstats
     restart: unless-stopped
     ports:
       - "5000:5000"
     volumes:
-      # 持久化数据目录
       - ./data/electricity_data:/app/electricity_data
-      # 配置文件目录（可选，方便直接编辑配置）
       - ./data/config:/app/config
     environment:
       - TZ=Asia/Shanghai
+      - CONFIG_DIR=/app/config
+      - DATA_DIR=/app/electricity_data
+      - WEB_PASSWORD=${WEB_PASSWORD:-}
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-}
     networks:
       - monitor-network
 

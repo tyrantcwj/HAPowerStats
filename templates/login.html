@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - 家庭用电监控</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .card {
+            width: 100%;
+            max-width: 420px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 16px;
+            padding: 32px;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 8px;
+            background: linear-gradient(90deg, #00d4ff, #00ff88);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .subtitle {
+            text-align: center;
+            color: #888;
+            margin-bottom: 24px;
+            font-size: 0.95em;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #aaa;
+        }
+        input {
+            width: 100%;
+            padding: 12px 15px;
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 8px;
+            background: rgba(0,0,0,0.3);
+            color: #fff;
+            font-size: 1em;
+            margin-bottom: 16px;
+        }
+        button {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            background: linear-gradient(90deg, #00d4ff, #0099cc);
+            color: #fff;
+            font-size: 1em;
+            cursor: pointer;
+        }
+        .hint { color: #888; font-size: 0.85em; margin-bottom: 16px; }
+        .error {
+            display: none;
+            margin-top: 16px;
+            padding: 12px;
+            border-radius: 8px;
+            background: rgba(255,68,68,0.2);
+            color: #ff4444;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>⚡ 家庭用电监控</h1>
+        <p class="subtitle" id="subtitle">请输入访问密码</p>
+        <p class="hint" id="hint">首次使用需要设置登录密码，之后才能打开监控面板。</p>
+        <form id="authForm">
+            <label for="password">密码</label>
+            <input id="password" type="password" minlength="6" required autocomplete="current-password">
+            <button type="submit" id="submitBtn">登录</button>
+        </form>
+        <div class="error" id="errorBox"></div>
+    </div>
+    <script>
+        let needsSetup = false;
+
+        async function init() {
+            const res = await fetch('/api/auth/status');
+            const data = await res.json();
+            if (data.authenticated) {
+                location.href = '/';
+                return;
+            }
+            needsSetup = data.needs_setup;
+            document.getElementById('subtitle').textContent = needsSetup ? '首次使用，请设置登录密码' : '请输入访问密码';
+            document.getElementById('hint').style.display = needsSetup ? 'block' : 'none';
+            document.getElementById('submitBtn').textContent = needsSetup ? '设置密码并进入' : '登录';
+        }
+
+        document.getElementById('authForm').addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const password = document.getElementById('password').value;
+            const errorBox = document.getElementById('errorBox');
+            errorBox.style.display = 'none';
+            const url = needsSetup ? '/api/auth/setup' : '/api/auth/login';
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password })
+            });
+            const data = await res.json();
+            if (!res.ok || data.error) {
+                errorBox.textContent = data.error || '操作失败';
+                errorBox.style.display = 'block';
+                return;
+            }
+            location.href = '/';
+        });
+
+        init();
+    </script>
+</body>
+</html>

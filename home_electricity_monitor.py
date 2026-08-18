@@ -10,61 +10,61 @@
 import json
 import time
 import csv
-import os
 import logging
 import signal
 from datetime import datetime, timedelta
 from pathlib import Path
 import threading
+from typing import Optional
 
 import paho.mqtt.client as mqtt
 
+from config_store import (
+    DATA_DIR,
+    STATE_FILE,
+    ensure_dirs,
+    load_ha_config,
+    load_mqtt_config,
+    load_mysql_config,
+)
+
 # =============================================================================
-# 配置区域 - 请根据实际情况修改以下配置
-# =============================================================================
-
-MQTT_CONFIG = {
-    "broker": "192.168.1.100",      # MQTT服务器地址（HA的IP地址）
-    "port": 1883,                    # MQTT端口，默认1883
-    "username": "mqtt_user",         # MQTT用户名
-    "password": "mqtt_password",     # MQTT密码
-    "client_id": "home_electricity_monitor"  # 客户端ID
-}
-
-# 设备配置
-DEVICE_CONFIG = {
-    "name": "家庭用电监控",           # 设备显示名称
-    "device_id": "home_electricity",  # 设备唯一ID
-    "manufacturer": "Custom",         # 制造商名称
-    "model": "Electricity Monitor"    # 设备型号
-}
-
 # 程序配置
-CONFIG = {
-    "update_interval": 10,            # 数据上报间隔（秒）
-    "csv_dir": "electricity_data",    # CSV数据存储目录
-    "state_file": "electricity_state.json",  # 状态持久化文件
-    "log_level": "INFO"               # 日志级别
+# =============================================================================
+
+DEVICE_CONFIG = {
+    "name": "家庭用电监控",
+    "device_id": "home_electricity",
+    "manufacturer": "Custom",
+    "model": "Electricity Monitor",
 }
 
-# Web服务器配置
+CONFIG = {
+    "update_interval": 10,            # 采集间隔（秒）
+    "csv_dir": str(DATA_DIR),
+    "state_file": str(STATE_FILE),
+    "log_level": "INFO",
+    "max_energy_gap_seconds": 300,    # 超过此时长不补算电量，避免停机后虚增
+}
+
 WEB_CONFIG = {
-    "enabled": True,                  # 是否启用Web服务器
-    "host": "0.0.0.0",               # 监听地址
-    "port": 5000,                     # 端口号
-    "debug": False                    # 调试模式
+    "enabled": True,
+    "host": "0.0.0.0",
+    "port": 5000,
+    "debug": False,
 }
 
 # =============================================================================
 # 日志配置
 # =============================================================================
+ensure_dirs()
 logging.basicConfig(
     level=getattr(logging, CONFIG["log_level"]),
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("electricity_monitor.log", encoding='utf-8')
-    ]
+        logging.FileHandler(DATA_DIR / "electricity_monitor.log", encoding="utf-8"),
+    ],
 )
 logger = logging.getLogger(__name__)
 
@@ -174,45 +174,73 @@ class StateManager:
         self.state["month_energy_kwh"] = month_kwh
 
 # =============================================================================
-# 功能函数：获取功率读数（数据源接口）
+# 功率数据源：从 Home Assistant 实体读取
 # =============================================================================
 
-def get_power_reading() -> float:
-    """
-    获取当前功率读数（单位：瓦特 W）
-    
-    注意：这是一个占位函数，需要根据您的实际数据源进行修改
-    
-    可能的数据源：
-    1. 智能电表（通过串口/Modbus读取）
-    2. 智能插座（通过API获取）
-    3. 其他传感器
-    
-    返回值：当前功率值（W）
-    """
-    # TODO: 请在这里替换为您的实际数据采集代码
-    
-    # 示例：从文件读取
-    # try:
-    #     with open("power.txt", "r") as f:
-    #         return float(f.read().strip())
-    # except:
-    #     return 0.0
-    
-    # 示例：从Modbus设备读取
-    # from pymodbus.client import ModbusSerialClient
-    # client = ModbusSerialClient(port='/dev/ttyUSB0', baudrate=9600)
-    # client.connect()
-    # result = client.read_holding_registers(address=0, count=1, slave=1)
-    # client.close()
-    # return float(result.registers[0]) / 100  # 假设返回值单位是0.01W
-    
-    # 示例：从HTTP API读取
-    # import requests
-    # response = requests.get("http://192.168.1.50/api/power", timeout=5)
-    # return float(response.json()['power'])
-    
-    return 0.0  # 默认返回0，请替换为实际采集代码
+class PowerSource:
+    """从 Home Assistant 功率实体读取实时功率（W）。未配置或失败时返回 None。"""
+
+    def read(self) -> Optional[float]:
+        config = load_ha_config()
+        url = (config.get("url") or "").strip().rstrip("/")
+        token = config.get("token") or ""
+        entity_id = (config.get("power_entity_id") or "").strip()
+
+        if not url or not token or not entity_id:
+            logger.warning(
+                "未配置 Home Assistant 功率实体，跳过采集。"
+                "请在 Web 设置中填写 HA 地址、访问令牌和功率实体 ID"
+            )
+            return None
+
+        if not url.startswith("http"):
+            url = "http://" + url
+
+        try:
+            import requests
+
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            }
+            response = requests.get(
+                f"{url}/api/states/{entity_id}",
+                headers=headers,
+                timeout=8,
+            )
+
+            if response.status_code == 401:
+                logger.error("HA 访问令牌无效")
+                return None
+            if response.status_code == 404:
+                logger.error(f"HA 实体不存在: {entity_id}")
+                return None
+            if response.status_code != 200:
+                logger.error(f"读取 HA 实体失败: HTTP {response.status_code}")
+                return None
+
+            data = response.json()
+            state = data.get("state")
+            if state in (None, "", "unknown", "unavailable"):
+                logger.warning(f"HA 实体 {entity_id} 状态不可用: {state}")
+                return None
+
+            value = float(state)
+            unit = str((data.get("attributes") or {}).get("unit_of_measurement") or "W")
+            unit_key = unit.lower().replace(" ", "")
+            if unit_key in ("kw", "kilowatt"):
+                value *= 1000.0
+            elif unit_key in ("mw", "megawatt"):
+                value *= 1_000_000.0
+
+            return max(0.0, value)
+
+        except (TypeError, ValueError):
+            logger.error(f"HA 实体 {entity_id} 数值无法解析")
+            return None
+        except Exception as e:
+            logger.error(f"读取 HA 功率失败: {e}")
+            return None
 
 # =============================================================================
 # CSV历史记录管理
@@ -374,8 +402,7 @@ class MySQLManager:
                     power_w DECIMAL(10,2) NOT NULL,
                     total_energy_kwh DECIMAL(12,4) NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    INDEX idx_record_time (record_time),
-                    INDEX idx_date (record_time)
+                    INDEX idx_record_time (record_time)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
             
@@ -540,6 +567,8 @@ class EnergyCalculator:
         if last_reset_month:
             if isinstance(last_reset_month, str):
                 last_reset_month = tuple(json.loads(last_reset_month))
+            elif isinstance(last_reset_month, (list, tuple)):
+                last_reset_month = tuple(last_reset_month)
         else:
             last_reset_month = current_month  # 首次运行
             
@@ -647,6 +676,7 @@ class HomeAssistantDiscovery:
                 "state_topic": f"{self.base_topic}/power/state",
                 "unit_of_measurement": "W",
                 "device_class": "power",
+                "state_class": "measurement",
                 "icon": "mdi:flash",
                 "value_template": "{{ value }}"
             },
@@ -656,6 +686,7 @@ class HomeAssistantDiscovery:
                 "state_topic": f"{self.base_topic}/total/state",
                 "unit_of_measurement": "kWh",
                 "device_class": "energy",
+                "state_class": "total_increasing",
                 "icon": "mdi:meter-electric",
                 "value_template": "{{ value }}"
             },
@@ -665,6 +696,7 @@ class HomeAssistantDiscovery:
                 "state_topic": f"{self.base_topic}/today/state",
                 "unit_of_measurement": "kWh",
                 "device_class": "energy",
+                "state_class": "total_increasing",
                 "icon": "mdi:calendar-today",
                 "value_template": "{{ value }}"
             },
@@ -674,6 +706,7 @@ class HomeAssistantDiscovery:
                 "state_topic": f"{self.base_topic}/month/state",
                 "unit_of_measurement": "kWh",
                 "device_class": "energy",
+                "state_class": "total_increasing",
                 "icon": "mdi:calendar-month",
                 "value_template": "{{ value }}"
             }
@@ -769,8 +802,9 @@ class MQTTManager:
             config: MQTT配置字典
         """
         self.config = config
+        self.enabled = bool((config.get("broker") or "").strip())
         self.client = mqtt.Client(
-            client_id=config['client_id'],
+            client_id=config.get("client_id") or "home_electricity_monitor",
             protocol=mqtt.MQTTv311
         )
         
@@ -869,6 +903,9 @@ class MQTTManager:
             
     def connect(self):
         """建立MQTT连接"""
+        if not self.enabled:
+            logger.info("未配置 MQTT 服务器，跳过连接")
+            return
         try:
             logger.info(f"正在连接MQTT服务器: {self.config['broker']}:{self.config['port']}")
             self.client.connect(
@@ -893,6 +930,8 @@ class MQTTManager:
             
     def disconnect(self):
         """断开MQTT连接"""
+        if not self.enabled:
+            return
         try:
             # 取消重连定时器
             if self.reconnect_timer:
@@ -926,10 +965,14 @@ class ElectricityMonitor:
         self.mysql_manager = MySQLManager(mysql_config)
         
         self.energy_calculator = EnergyCalculator(self.state_manager, self.csv_manager)
-        self.mqtt_manager = MQTTManager(MQTT_CONFIG)
+        self.mqtt_manager = MQTTManager(load_mqtt_config())
+        self.power_source = PowerSource()
+        self.ha_discovery = None
         
-        # 记录上次数据采集时间
+        # 记录上次数据采集时间（用于实际间隔积分）
         self.last_update_time = 0
+        self.last_sample_time = 0.0
+        self.last_power_w = None
         
         # 当前统计数据（用于MQTT发布）
         self.current_stats = {
@@ -941,46 +984,49 @@ class ElectricityMonitor:
         
     def _load_mysql_config(self) -> dict:
         """从配置文件加载MySQL设置"""
-        try:
-            config_file = Path("mysql_config.json")
-            if config_file.exists():
-                with open(config_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-        except Exception as e:
-            logger.error(f"加载MySQL配置失败: {e}")
-        return {"host": "", "port": 3306, "database": "electricity_monitor", "user": "", "password": ""}
+        return load_mysql_config()
         
     def setup(self):
         """程序初始化设置"""
-        # 连接MQTT
-        self.mqtt_manager.connect()
+        if self.mqtt_manager.enabled:
+            self.mqtt_manager.connect()
+            time.sleep(1)
+            self.ha_discovery = HomeAssistantDiscovery(
+                self.mqtt_manager.client,
+                DEVICE_CONFIG
+            )
+            self.ha_discovery.publish_discovery()
+        else:
+            logger.info("未配置 MQTT，跳过 Home Assistant 自动发现")
         
-        # 发布HomeAssistant自动发现配置
-        time.sleep(1)  # 等待MQTT连接稳定
-        self.ha_discovery = HomeAssistantDiscovery(
-            self.mqtt_manager.client,
-            DEVICE_CONFIG
-        )
-        self.ha_discovery.publish_discovery()
-        
-        # 加载初始状态
         self.current_stats['total_energy_kwh'] = self.state_manager.get_total_energy()
-        
         logger.info(f"程序初始化完成，历史累计电量: {self.current_stats['total_energy_kwh']:.4f} kWh")
         
     def collect_and_publish(self):
         """采集数据并发布"""
         try:
-            # 读取当前功率 (W)
-            power_w = get_power_reading()
-            
-            # 计算本次累加的电能 (kWh)
-            # 公式：功率(W) × 时间(h) ÷ 1000 = 电能(kWh)
-            time_diff_hours = CONFIG['update_interval'] / 3600.0
-            energy_increment_kwh = power_w * time_diff_hours / 1000.0
-            
-            # 累加到总用电量
-            self.state_manager.add_energy(energy_increment_kwh)
+            power_w = self.power_source.read()
+            now = time.time()
+
+            if power_w is None:
+                return
+
+            # 用上一次实测功率 × 实际间隔积分；首次采样或间隔过长不补算
+            if self.last_sample_time > 0 and self.last_power_w is not None:
+                elapsed = now - self.last_sample_time
+                max_gap = CONFIG["max_energy_gap_seconds"]
+                if elapsed <= 0:
+                    pass
+                elif elapsed > max_gap:
+                    logger.warning(
+                        f"采样间隔过长 ({elapsed:.0f}s > {max_gap}s)，跳过本次电量累加"
+                    )
+                else:
+                    energy_increment_kwh = self.last_power_w * elapsed / 3600.0 / 1000.0
+                    self.state_manager.add_energy(energy_increment_kwh)
+
+            self.last_sample_time = now
+            self.last_power_w = power_w
             
             # 获取更新后的总用电量
             total_energy_kwh = self.state_manager.get_total_energy()
@@ -1007,11 +1053,10 @@ class ElectricityMonitor:
             # 保存到CSV
             self.csv_manager.write_record(power_w, total_energy_kwh)
             
-            # 保存到MySQL
             self.mysql_manager.write_record(power_w, total_energy_kwh)
-            
-            # 发布到MQTT
-            self.ha_discovery.publish_state(self.current_stats)
+
+            if self.ha_discovery and self.mqtt_manager.connected:
+                self.ha_discovery.publish_state(self.current_stats)
             
             logger.info(
                 f"数据更新 - 功率: {power_w:.1f}W, "
