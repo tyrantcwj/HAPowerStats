@@ -3,18 +3,34 @@
 
 import json
 import os
-import secrets
+import re
 from pathlib import Path
 
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "config"))
 DATA_DIR = Path(os.environ.get("DATA_DIR", "electricity_data"))
 
 HA_CONFIG_FILE = CONFIG_DIR / "ha_config.json"
+DEVICES_FILE = CONFIG_DIR / "devices.json"
 MQTT_CONFIG_FILE = CONFIG_DIR / "mqtt_config.json"
 MYSQL_CONFIG_FILE = CONFIG_DIR / "mysql_config.json"
-WEB_AUTH_FILE = CONFIG_DIR / "web_auth.json"
-SECRET_KEY_FILE = CONFIG_DIR / "secret_key"
 STATE_FILE = DATA_DIR / "electricity_state.json"
+
+# 一个插座可绑定的实体角色（与 ha_client.ALL_ROLES 保持一致）
+DEVICE_ROLES = (
+    "power",
+    "energy",
+    "voltage",
+    "current",
+    "power_factor",
+    "frequency",
+    "apparent_power",
+    "switch",
+)
+
+# 电量统计方式：auto=有电量实体就用、没有就按功率积分
+ENERGY_MODES = ("auto", "entity", "integrate")
+
+LEGACY_DEVICE_KEY = "legacy_main"
 
 DEFAULT_MQTT = {
     "broker": "",
@@ -27,7 +43,6 @@ DEFAULT_MQTT = {
 DEFAULT_HA = {
     "url": "",
     "token": "",
-    "power_entity_id": "",
 }
 
 DEFAULT_MYSQL = {
@@ -77,20 +92,167 @@ def keep_secret(new_value, old_value) -> str:
 
 
 def load_ha_config() -> dict:
-    return load_json(HA_CONFIG_FILE, DEFAULT_HA)
+    """HA 连接配置：只有地址和令牌，具体设备在 devices.json 里。"""
+    config = load_json(HA_CONFIG_FILE, DEFAULT_HA)
+    return {
+        "url": (config.get("url") or "").strip(),
+        "token": config.get("token") or "",
+    }
 
 
 def save_ha_config(data: dict) -> dict:
     current = load_ha_config()
+    url = (data.get("url") or "").strip().rstrip("/")
+    if url and not url.startswith("http"):
+        url = "http://" + url
     config = {
-        "url": (data.get("url") or "").strip().rstrip("/"),
+        "url": url,
         "token": keep_secret(data.get("token"), current.get("token")),
-        "power_entity_id": (data.get("power_entity_id") or "").strip(),
     }
-    if config["url"] and not config["url"].startswith("http"):
-        config["url"] = "http://" + config["url"]
     save_json(HA_CONFIG_FILE, config)
     return config
+
+
+# =============================================================================
+# 插座设备列表（支持多个）
+# =============================================================================
+
+def _slugify(text: str, fallback: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9_]+", "_", str(text or "")).strip("_").lower()
+    return slug or fallback
+
+
+def normalize_device(raw: dict, index: int = 0) -> dict:
+    """把前端/发现结果里的一条设备整理成统一结构，非法项返回 None。"""
+    if not isinstance(raw, dict):
+        return None
+
+    entities = {}
+    raw_entities = raw.get("entities") or {}
+    if isinstance(raw_entities, dict):
+        for role in DEVICE_ROLES:
+            entity_id = (raw_entities.get(role) or "").strip()
+            if entity_id:
+                entities[role] = entity_id
+
+    if not entities.get("power") and not entities.get("energy"):
+        # 既没功率也没电量，采集不到任何有效数据
+        return None
+
+    key = (raw.get("key") or "").strip()
+    if not key:
+        base = entities.get("power") or entities.get("energy") or "device"
+        key = _slugify(base.split(".", 1)[-1], "device_%d" % (index + 1))
+
+    energy_mode = (raw.get("energy_mode") or "auto").strip().lower()
+    if energy_mode not in ENERGY_MODES:
+        energy_mode = "auto"
+
+    name = (raw.get("name") or "").strip() or key
+    return {
+        "key": key,
+        "name": name,
+        "enabled": bool(raw.get("enabled", True)),
+        "model": (raw.get("model") or "").strip(),
+        "manufacturer": (raw.get("manufacturer") or "").strip(),
+        "energy_mode": energy_mode,
+        "entities": entities,
+    }
+
+
+def _migrate_legacy_device() -> list:
+    """老版本只配了一个 power_entity_id，自动转成一个设备。"""
+    raw = load_json(HA_CONFIG_FILE, {})
+    entity_id = (raw.get("power_entity_id") or "").strip()
+    if not entity_id:
+        return []
+    device = normalize_device({
+        "key": LEGACY_DEVICE_KEY,
+        "name": "默认功率实体",
+        "entities": {"power": entity_id},
+    })
+    devices = [device] if device else []
+    if devices:
+        save_json(DEVICES_FILE, {"devices": devices})
+    return devices
+
+
+def load_devices() -> list:
+    """读取已配置的插座设备列表。"""
+    if not DEVICES_FILE.exists():
+        return _migrate_legacy_device()
+
+    data = load_json(DEVICES_FILE, {"devices": []})
+    raw_list = data.get("devices")
+    if not isinstance(raw_list, list):
+        return []
+
+    devices = []
+    seen = set()
+    for index, raw in enumerate(raw_list):
+        device = normalize_device(raw, index)
+        if not device or device["key"] in seen:
+            continue
+        seen.add(device["key"])
+        devices.append(device)
+    return devices
+
+
+def save_devices(raw_list) -> list:
+    """整体覆盖保存设备列表。"""
+    devices = []
+    seen = set()
+    for index, raw in enumerate(raw_list or []):
+        device = normalize_device(raw, index)
+        if not device or device["key"] in seen:
+            continue
+        seen.add(device["key"])
+        devices.append(device)
+    save_json(DEVICES_FILE, {"devices": devices})
+    return devices
+
+
+def upsert_devices(new_devices) -> list:
+    """按 key 合并进已有列表：已存在的更新实体映射，不存在的追加。"""
+    devices = load_devices()
+    by_key = {d["key"]: d for d in devices}
+    order = [d["key"] for d in devices]
+
+    for index, raw in enumerate(new_devices or []):
+        device = normalize_device(raw, index)
+        if not device:
+            continue
+        existing = by_key.get(device["key"])
+        if existing:
+            # 保留用户改过的名字和启用状态
+            device["name"] = existing.get("name") or device["name"]
+            device["enabled"] = existing.get("enabled", True)
+            device["energy_mode"] = existing.get("energy_mode", device["energy_mode"])
+        else:
+            order.append(device["key"])
+        by_key[device["key"]] = device
+
+    return save_devices([by_key[key] for key in order])
+
+
+def remove_device(key: str) -> list:
+    devices = [d for d in load_devices() if d["key"] != key]
+    return save_devices(devices)
+
+
+def devices_signature(devices) -> str:
+    """设备配置指纹，主程序据此感知 Web 端改动并热加载。"""
+    payload = [
+        {
+            "key": d.get("key"),
+            "name": d.get("name"),
+            "enabled": d.get("enabled"),
+            "energy_mode": d.get("energy_mode"),
+            "entities": d.get("entities"),
+        }
+        for d in devices or []
+    ]
+    return json.dumps(payload, sort_keys=True, ensure_ascii=False)
 
 
 def load_mqtt_config() -> dict:
@@ -145,16 +307,3 @@ def save_mysql_config(data: dict) -> dict:
     save_json(MYSQL_CONFIG_FILE, config)
     return config
 
-
-def get_or_create_secret_key() -> str:
-    env_key = (os.environ.get("FLASK_SECRET_KEY") or "").strip()
-    if env_key:
-        return env_key
-    ensure_dirs()
-    if SECRET_KEY_FILE.exists():
-        stored = SECRET_KEY_FILE.read_text(encoding="utf-8").strip()
-        if stored:
-            return stored
-    key = secrets.token_hex(32)
-    SECRET_KEY_FILE.write_text(key, encoding="utf-8")
-    return key

@@ -1,448 +1,432 @@
 # -*- coding: utf-8 -*-
 """
-家庭用电监控 - Web服务器
-提供实时监控页面、历史数据查询、插座控制功能
+家庭用电监控 - Web 服务器
+
+提供实时监控页面、HA 设备扫描导入、多插座数据查询与开关控制。
 """
 
-import csv
 import json
 import os
 import socket
-import time
-from datetime import datetime, timedelta
-from functools import wraps
-
-from flask import Flask, jsonify, redirect, render_template, request, send_file, session, url_for
-from flask_socketio import SocketIO, emit
-from werkzeug.security import check_password_hash, generate_password_hash
 import threading
+import time
+from datetime import datetime
 
+from flask import Flask, jsonify, render_template, request, send_file
+from flask_socketio import SocketIO, emit
+
+import ha_client
 from config_store import (
     DATA_DIR,
     STATE_FILE,
-    WEB_AUTH_FILE,
-    ensure_dirs,
-    get_or_create_secret_key,
+    load_devices,
     load_ha_config,
-    load_json,
     load_mqtt_config,
     load_mysql_config,
+    remove_device,
+    save_devices,
     save_ha_config,
-    save_json,
     save_mqtt_config,
     save_mysql_config,
+    upsert_devices,
 )
+from ha_client import HAClient, HAError
+from storage import CSVStore, csv_path, legacy_csv_path, read_day_records
 
 WEB_CONFIG = {
-    "host": "0.0.0.0",
-    "port": 5000,
+    "host": os.environ.get("WEB_HOST", "0.0.0.0"),
+    "port": int(os.environ.get("WEB_PORT", "5000")),
     "debug": False,
 }
 
-PUBLIC_ENDPOINTS = {
-    "login_page",
-    "auth_status",
-    "auth_login",
-    "auth_setup",
-}
-
 app = Flask(__name__)
-app.config["SECRET_KEY"] = get_or_create_secret_key()
-app.config["SESSION_COOKIE_HTTPONLY"] = True
-app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=7)
 
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
-latest_data = {
-    "power_w": 0.0,
-    "total_energy_kwh": 0.0,
-    "today_energy_kwh": 0.0,
-    "month_energy_kwh": 0.0,
-    "last_update": None,
-}
-
-
-def _env_password() -> str:
-    return (os.environ.get("WEB_PASSWORD") or "").strip()
-
-
-def _auth_record() -> dict:
-    return load_json(WEB_AUTH_FILE, {"password_hash": ""})
-
-
-def password_configured() -> bool:
-    if _env_password():
-        return True
-    return bool(_auth_record().get("password_hash"))
-
-
-def verify_password(password: str) -> bool:
-    env_password = _env_password()
-    if env_password:
-        return password == env_password
-    password_hash = _auth_record().get("password_hash") or ""
-    if not password_hash:
-        return False
-    return check_password_hash(password_hash, password)
-
-
-def set_password(password: str):
-    ensure_dirs()
-    save_json(WEB_AUTH_FILE, {"password_hash": generate_password_hash(password)})
-
-
-def is_authenticated() -> bool:
-    return bool(session.get("authenticated"))
-
-
-def login_required(view):
-    @wraps(view)
-    def wrapped(*args, **kwargs):
-        if not is_authenticated():
-            if request.path.startswith("/api/") or request.is_json:
-                return jsonify({"error": "未登录"}), 401
-            return redirect(url_for("login_page"))
-        return view(*args, **kwargs)
-
-    return wrapped
-
-
-@app.before_request
-def protect_routes():
-    if request.endpoint in PUBLIC_ENDPOINTS:
-        return None
-    if request.path.startswith("/static/"):
-        return None
-    if is_authenticated():
-        return None
-    if request.path.startswith("/api/") or request.path.startswith("/socket.io"):
-        return jsonify({"error": "未登录"}), 401
-    return redirect(url_for("login_page"))
-
-
-@app.route("/login")
-def login_page():
-    if is_authenticated():
-        return redirect(url_for("index"))
-    return render_template("login.html")
-
-
-@app.route("/api/auth/status")
-def auth_status():
-    return jsonify({
-        "authenticated": is_authenticated(),
-        "needs_setup": not password_configured(),
-        "password_from_env": bool(_env_password()),
-    })
-
-
-@app.route("/api/auth/setup", methods=["POST"])
-def auth_setup():
-    if password_configured():
-        return jsonify({"error": "已设置过密码，请直接登录"}), 400
-    data = request.get_json(silent=True) or {}
-    password = (data.get("password") or "").strip()
-    if len(password) < 6:
-        return jsonify({"error": "密码至少 6 位"}), 400
-    set_password(password)
-    session.clear()
-    session["authenticated"] = True
-    session.permanent = True
-    return jsonify({"success": True})
-
-
-@app.route("/api/auth/login", methods=["POST"])
-def auth_login():
-    if not password_configured():
-        return jsonify({"error": "请先设置登录密码"}), 400
-    data = request.get_json(silent=True) or {}
-    password = data.get("password") or ""
-    if not verify_password(password):
-        return jsonify({"error": "密码错误"}), 401
-    session.clear()
-    session["authenticated"] = True
-    session.permanent = True
-    return jsonify({"success": True})
-
-
-@app.route("/api/auth/logout", methods=["POST"])
-def auth_logout():
-    session.clear()
-    return jsonify({"success": True})
+# 扫描结果缓存，避免前端反复点击时把 HA 打满
+_discovery_cache = {"time": 0.0, "devices": [], "states": []}
+_discovery_lock = threading.Lock()
+DISCOVERY_TTL = 20
 
 
 @app.route("/")
-@login_required
 def index():
     return render_template("index.html")
 
 
+# =============================================================================
+# 实时数据
+# =============================================================================
+
+def _read_state() -> dict:
+    try:
+        if STATE_FILE.exists():
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            if isinstance(state, dict):
+                return state
+    except Exception as e:
+        print("读取状态文件失败: %s" % e)
+    return {}
+
+
+def _realtime_payload() -> dict:
+    state = _read_state()
+    device_states = state.get("devices") if isinstance(state.get("devices"), dict) else {}
+    aggregate = state.get("aggregate") or {
+        "current_power_w": state.get("current_power_w", 0.0),
+        "total_energy_kwh": state.get("total_energy_kwh", 0.0),
+        "today_energy_kwh": state.get("today_energy_kwh", 0.0),
+        "month_energy_kwh": state.get("month_energy_kwh", 0.0),
+    }
+
+    devices = []
+    for config in load_devices():
+        runtime = device_states.get(config["key"]) or {}
+        devices.append({
+            "key": config["key"],
+            "name": config.get("name") or config["key"],
+            "enabled": config.get("enabled", True),
+            "model": config.get("model", ""),
+            "manufacturer": config.get("manufacturer", ""),
+            "energy_mode": config.get("energy_mode", "auto"),
+            "entities": config.get("entities", {}),
+            "has_switch": bool((config.get("entities") or {}).get("switch")),
+            "available": bool(runtime.get("available")),
+            "power_w": float(runtime.get("current_power_w") or 0.0),
+            "total_energy_kwh": float(runtime.get("total_energy_kwh") or 0.0),
+            "today_energy_kwh": float(runtime.get("today_energy_kwh") or 0.0),
+            "month_energy_kwh": float(runtime.get("month_energy_kwh") or 0.0),
+            "voltage_v": runtime.get("voltage_v"),
+            "current_a": runtime.get("current_a"),
+            "power_factor": runtime.get("power_factor"),
+            "frequency_hz": runtime.get("frequency_hz"),
+            "switch_state": runtime.get("switch_state"),
+            "energy_source": runtime.get("energy_source", "integrate"),
+            "last_update": runtime.get("last_update"),
+        })
+
+    return {
+        # 合计（老字段名保留，方便外部脚本继续用）
+        "power_w": float(aggregate.get("current_power_w") or 0.0),
+        "total_energy_kwh": float(aggregate.get("total_energy_kwh") or 0.0),
+        "today_energy_kwh": float(aggregate.get("today_energy_kwh") or 0.0),
+        "month_energy_kwh": float(aggregate.get("month_energy_kwh") or 0.0),
+        "device_count": len(devices),
+        "online_count": sum(1 for d in devices if d["available"]),
+        "devices": devices,
+        "last_update": state.get("last_update") or datetime.now().isoformat(),
+    }
+
+
 @app.route("/api/realtime")
-@login_required
 def get_realtime_data():
-    _update_latest_data()
-    return jsonify(latest_data)
+    return jsonify(_realtime_payload())
+
+
+# =============================================================================
+# 历史数据
+# =============================================================================
+
+def _aggregate_records(records: list) -> list:
+    """把同一时刻的多设备记录合并成一条合计记录。"""
+    buckets = {}
+    for record in records:
+        bucket = buckets.setdefault(record["timestamp"], {
+            "timestamp": record["timestamp"],
+            "power_w": 0.0,
+            "total_energy_kwh": 0.0,
+            "device_count": 0,
+        })
+        bucket["power_w"] += record.get("power_w") or 0.0
+        bucket["total_energy_kwh"] += record.get("total_energy_kwh") or 0.0
+        bucket["device_count"] += 1
+    return [buckets[k] for k in sorted(buckets)]
 
 
 @app.route("/api/history")
-@login_required
 def get_history_data():
     date_str = request.args.get("date", datetime.now().strftime("%Y-%m-%d"))
+    device_key = (request.args.get("device") or "").strip()
+    if device_key in ("all", "__all__"):
+        device_key = ""
     try:
         query_date = datetime.strptime(date_str, "%Y-%m-%d").date()
     except ValueError:
         return jsonify({"error": "日期格式错误，请使用 YYYY-MM-DD"}), 400
 
-    records = _read_csv_records(query_date)
+    records = read_day_records(query_date, device_key or None)
+    devices_in_day = []
+    seen = set()
+    for record in records:
+        key = record.get("device_key")
+        if key and key not in seen:
+            seen.add(key)
+            devices_in_day.append({"key": key, "name": record.get("device_name") or key})
+
+    if device_key:
+        rows = [
+            {
+                "timestamp": r["timestamp"],
+                "power_w": r.get("power_w") or 0.0,
+                "total_energy_kwh": r.get("total_energy_kwh") or 0.0,
+                "voltage_v": r.get("voltage_v"),
+                "current_a": r.get("current_a"),
+            }
+            for r in records
+        ]
+    else:
+        rows = _aggregate_records(records)
+
     return jsonify({
         "date": date_str,
-        "records": records,
-        "count": len(records),
+        "device": device_key,
+        "devices": devices_in_day,
+        "records": rows,
+        "count": len(rows),
     })
 
 
 @app.route("/api/dates")
-@login_required
 def get_available_dates():
     year = request.args.get("year", datetime.now().year, type=int)
     month = request.args.get("month", datetime.now().month, type=int)
-    csv_path = DATA_DIR / f"electricity_{year}-{month:02d}.csv"
-    if not csv_path.exists():
-        return jsonify({"dates": []})
-
-    dates = set()
-    try:
-        with open(csv_path, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                dates.add(row["timestamp"][:10])
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    return jsonify({"dates": sorted(dates)})
+    return jsonify({"dates": CSVStore(DATA_DIR).available_dates(year, month)})
 
 
 @app.route("/api/export")
-@login_required
 def export_csv():
     year = request.args.get("year", datetime.now().year, type=int)
     month = request.args.get("month", datetime.now().month, type=int)
-    csv_path = DATA_DIR / f"electricity_{year}-{month:02d}.csv"
-    if not csv_path.exists():
-        return jsonify({"error": "文件不存在"}), 404
+    reference = datetime(year, month, 1)
+    path = csv_path(reference, DATA_DIR)
+    if not path.exists():
+        path = legacy_csv_path(reference, DATA_DIR)
+    if not path.exists():
+        return jsonify({"error": "该月份还没有数据"}), 404
     return send_file(
-        csv_path,
+        path,
         mimetype="text/csv",
         as_attachment=True,
-        download_name=f"electricity_{year}-{month:02d}.csv",
+        download_name="electricity_%04d-%02d.csv" % (year, month),
     )
 
 
-@app.route("/api/config/mysql", methods=["GET"])
-@login_required
-def get_mysql_config_api():
-    config = load_mysql_config()
-    return jsonify({
-        "host": config.get("host", ""),
-        "port": config.get("port", 3306),
-        "database": config.get("database", "electricity_monitor"),
-        "user": config.get("user", ""),
-        "password_set": bool(config.get("password")),
-    })
+# =============================================================================
+# HA 连接配置（只要地址 + 令牌）
+# =============================================================================
 
-
-@app.route("/api/config/mysql", methods=["POST"])
-@login_required
-def save_mysql_config_api():
-    data = request.get_json(silent=True) or {}
-    host = (data.get("host") or "").strip()
-    database = (data.get("database") or "electricity_monitor").strip()
-    user = (data.get("user") or "").strip()
-    if not host or not database or not user:
-        return jsonify({"error": "请填写数据库地址、数据库名和用户名"}), 400
-    try:
-        save_mysql_config(data)
-        return jsonify({"success": True, "message": "配置已保存，重启程序后生效"})
-    except Exception as e:
-        return jsonify({"error": f"保存失败: {str(e)}"}), 500
-
-
-@app.route("/api/config/mysql/test", methods=["POST"])
-@login_required
-def test_mysql_connection():
-    data = request.get_json(silent=True) or {}
-    current = load_mysql_config()
-    host = (data.get("host") or "").strip()
-    database = (data.get("database") or "").strip()
-    user = (data.get("user") or "").strip()
-    password = (data.get("password") or "").strip() or current.get("password", "")
-    try:
-        port = int(data.get("port") or 3306)
-    except (TypeError, ValueError):
-        port = 3306
-
-    if not host or not database or not user:
-        return jsonify({"error": "请填写完整信息"}), 400
-
-    try:
-        import pymysql
-
-        conn = pymysql.connect(
-            host=host,
-            port=port,
-            user=user,
-            password=password,
-            database=database,
-            charset="utf8mb4",
-            connect_timeout=5,
-        )
-        conn.close()
-        return jsonify({"success": True, "message": "连接成功！"})
-    except ImportError:
-        return jsonify({"error": "请先安装 pymysql: pip install pymysql"})
-    except Exception as e:
-        error_msg = str(e)
-        if "Unknown database" in error_msg:
-            return jsonify({"error": f"数据库 '{database}' 不存在，请先手动创建"})
-        if "Access denied" in error_msg:
-            return jsonify({"error": "用户名或密码错误"})
-        if "Connection refused" in error_msg:
-            return jsonify({"error": "连接被拒绝，请检查MySQL是否运行"})
-        return jsonify({"error": f"连接失败: {error_msg}"})
+def _client_from_request(data: dict) -> HAClient:
+    """优先用表单里填的，令牌留空则沿用已保存的。"""
+    current = load_ha_config()
+    url = (data.get("url") or "").strip() or current.get("url", "")
+    token = (data.get("token") or "").strip() or current.get("token", "")
+    return HAClient(url, token)
 
 
 @app.route("/api/config/ha", methods=["GET"])
-@login_required
 def get_ha_config_api():
     config = load_ha_config()
     return jsonify({
         "url": config.get("url", ""),
         "token_set": bool(config.get("token")),
-        "power_entity_id": config.get("power_entity_id", ""),
     })
 
 
 @app.route("/api/config/ha", methods=["POST"])
-@login_required
 def save_ha_config_api():
     data = request.get_json(silent=True) or {}
     url = (data.get("url") or "").strip()
-    entity_id = (data.get("power_entity_id") or "").strip()
     if not url:
-        return jsonify({"error": "HA地址不能为空"}), 400
-    if not entity_id:
-        return jsonify({"error": "请填写功率实体 ID"}), 400
+        return jsonify({"error": "HA 地址不能为空"}), 400
     current = load_ha_config()
     token = (data.get("token") or "").strip() or current.get("token", "")
     if not token:
         return jsonify({"error": "请填写访问令牌"}), 400
     try:
         save_ha_config(data)
-        return jsonify({"success": True, "message": "配置已保存，功率采集将使用新实体"})
+        with _discovery_lock:
+            _discovery_cache["time"] = 0.0
+        return jsonify({"success": True, "message": "已保存，现在可以扫描插座设备了"})
     except Exception as e:
-        return jsonify({"error": f"保存失败: {str(e)}"}), 500
+        return jsonify({"error": "保存失败: %s" % e}), 500
 
 
 @app.route("/api/config/ha/test", methods=["POST"])
-@login_required
 def test_ha_connection():
-    import requests
-
     data = request.get_json(silent=True) or {}
-    current = load_ha_config()
-    url = (data.get("url") or "").strip().rstrip("/")
-    token = (data.get("token") or "").strip() or current.get("token", "")
-    entity_id = (data.get("power_entity_id") or "").strip() or current.get("power_entity_id", "")
-
-    if not url:
-        return jsonify({"error": "HA地址不能为空"}), 400
-    if not token:
+    client = _client_from_request(data)
+    if not client.url:
+        return jsonify({"error": "HA 地址不能为空"}), 400
+    if not client.token:
         return jsonify({"error": "访问令牌不能为空"}), 400
-    if not url.startswith("http"):
-        url = "http://" + url
+    try:
+        info = client.api_info()
+        return jsonify({
+            "success": True,
+            "message": "连接成功！HA 版本: %s" % (info.get("version") or "未知"),
+        })
+    except HAError as e:
+        return jsonify({"error": str(e)})
+
+
+# =============================================================================
+# 设备扫描与导入
+# =============================================================================
+
+def _discover(force: bool = False, data: dict = None):
+    """扫描 HA 里的计量插座，20 秒内复用缓存。"""
+    with _discovery_lock:
+        fresh = (time.time() - _discovery_cache["time"]) < DISCOVERY_TTL
+        if fresh and not force and _discovery_cache["devices"]:
+            return _discovery_cache["devices"], _discovery_cache["states"]
+
+        client = _client_from_request(data or {})
+        states = client.get_states()
+        devices = ha_client.discover_devices(client, states)
+        _discovery_cache.update({"time": time.time(), "devices": devices, "states": states})
+        return devices, states
+
+
+@app.route("/api/ha/discover", methods=["GET", "POST"])
+def discover_ha_devices():
+    data = request.get_json(silent=True) or {}
+    force = bool(data.get("force")) or request.args.get("force") == "1"
+    try:
+        devices, _states = _discover(force=force, data=data)
+    except HAError as e:
+        return jsonify({"error": str(e)}), 400
+
+    configured = {d["key"]: d for d in load_devices()}
+    result = []
+    for device in devices:
+        item = dict(device)
+        item["added"] = device["key"] in configured
+        result.append(item)
+
+    return jsonify({
+        "devices": result,
+        "count": len(result),
+        "added_count": sum(1 for d in result if d["added"]),
+        "role_labels": ha_client.ROLE_LABELS,
+    })
+
+
+@app.route("/api/ha/entities")
+def list_ha_entities():
+    """给「手动改绑实体」的下拉框用。"""
+    role = (request.args.get("role") or "power").strip()
+    if role not in ha_client.ALL_ROLES:
+        return jsonify({"error": "未知的实体类型: %s" % role}), 400
+    try:
+        _devices, states = _discover()
+    except HAError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"role": role, "entities": ha_client.list_entities_by_role(states, role)})
+
+
+@app.route("/api/devices", methods=["GET"])
+def get_devices_api():
+    payload = _realtime_payload()
+    return jsonify({"devices": payload["devices"], "role_labels": ha_client.ROLE_LABELS})
+
+
+@app.route("/api/devices", methods=["POST"])
+def save_devices_api():
+    data = request.get_json(silent=True) or {}
+    raw_devices = data.get("devices")
+    if not isinstance(raw_devices, list):
+        return jsonify({"error": "参数格式错误"}), 400
+    try:
+        devices = save_devices(raw_devices)
+        return jsonify({"success": True, "devices": devices, "message": "已保存 %d 个插座" % len(devices)})
+    except Exception as e:
+        return jsonify({"error": "保存失败: %s" % e}), 500
+
+
+@app.route("/api/devices/import", methods=["POST"])
+def import_devices_api():
+    """勾选扫描结果后一键导入：功率 / 电量 / 电压等实体自动绑定。"""
+    data = request.get_json(silent=True) or {}
+    keys = data.get("keys")
+    if not isinstance(keys, list) or not keys:
+        return jsonify({"error": "请先勾选要导入的插座"}), 400
 
     try:
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        }
-        response = requests.get(f"{url}/api/", headers=headers, timeout=10)
-        if response.status_code == 401:
-            return jsonify({"error": "令牌无效，请检查访问令牌"})
-        if response.status_code != 200:
-            return jsonify({"error": f"连接失败，状态码: {response.status_code}"})
+        devices, _states = _discover(data=data)
+    except HAError as e:
+        return jsonify({"error": str(e)}), 400
 
-        ha_info = response.json()
-        message = f"连接成功！HA版本: {ha_info.get('version', '未知')}"
-        if entity_id:
-            state_resp = requests.get(
-                f"{url}/api/states/{entity_id}",
-                headers=headers,
-                timeout=10,
-            )
-            if state_resp.status_code == 404:
-                return jsonify({"error": f"HA已连通，但实体不存在: {entity_id}"})
-            if state_resp.status_code != 200:
-                return jsonify({"error": f"HA已连通，但读取实体失败: HTTP {state_resp.status_code}"})
-            state = state_resp.json().get("state")
-            unit = (state_resp.json().get("attributes") or {}).get("unit_of_measurement", "")
-            message += f"；实体 {entity_id} = {state} {unit}".strip()
-        return jsonify({"success": True, "message": message})
-    except requests.exceptions.Timeout:
-        return jsonify({"error": "连接超时，请检查HA地址是否正确"})
-    except requests.exceptions.ConnectionError:
-        return jsonify({"error": "无法连接，请检查HA是否运行，地址是否正确"})
-    except Exception as e:
-        return jsonify({"error": f"连接失败: {str(e)}"})
+    by_key = {d["key"]: d for d in devices}
+    selected = []
+    missing = []
+    for key in keys:
+        device = by_key.get(key)
+        if not device:
+            missing.append(key)
+            continue
+        selected.append({
+            "key": device["key"],
+            "name": device.get("name") or device["key"],
+            "model": device.get("model", ""),
+            "manufacturer": device.get("manufacturer", ""),
+            "entities": device.get("entities", {}),
+            "energy_mode": "auto",
+            "enabled": True,
+        })
+
+    if not selected:
+        return jsonify({"error": "所选设备已不在扫描结果里，请重新扫描"}), 400
+
+    saved = upsert_devices(selected)
+    message = "已导入 %d 个插座，采集程序会在下个周期自动生效" % len(selected)
+    if missing:
+        message += "（%d 个未找到已跳过）" % len(missing)
+    return jsonify({"success": True, "devices": saved, "message": message})
 
 
-@app.route("/api/config/ha/entities")
-@login_required
-def list_ha_power_entities():
-    import requests
+@app.route("/api/devices/<path:key>", methods=["DELETE"])
+def delete_device_api(key):
+    devices = remove_device(key)
+    return jsonify({"success": True, "devices": devices, "message": "已移除该插座"})
 
-    config = load_ha_config()
-    url = (config.get("url") or "").strip().rstrip("/")
-    token = config.get("token") or ""
-    if not url or not token:
-        return jsonify({"error": "请先保存 HA 地址和访问令牌"}), 400
-    if not url.startswith("http"):
-        url = "http://" + url
 
+# =============================================================================
+# 插座开关（直接调用 HA 服务）
+# =============================================================================
+
+@app.route("/api/switch", methods=["POST"])
+def control_switch():
+    data = request.get_json(silent=True) or {}
+    action = data.get("action")
+    device_key = (data.get("device_key") or data.get("switch_id") or "").strip()
+    if action not in ("on", "off"):
+        return jsonify({"error": "无效的操作"}), 400
+
+    device = next((d for d in load_devices() if d["key"] == device_key), None)
+    if not device:
+        return jsonify({"error": "未找到该插座"}), 404
+
+    entity_id = (device.get("entities") or {}).get("switch")
+    if not entity_id:
+        return jsonify({"error": "该插座没有绑定开关实体"}), 400
+
+    ha_config = load_ha_config()
+    client = HAClient(ha_config.get("url"), ha_config.get("token"))
+    domain = entity_id.split(".")[0]
+    service = "turn_on" if action == "on" else "turn_off"
     try:
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        }
-        response = requests.get(f"{url}/api/states", headers=headers, timeout=15)
-        if response.status_code != 200:
-            return jsonify({"error": f"读取实体失败: HTTP {response.status_code}"}), 502
+        client.call_service(domain, service, {"entity_id": entity_id})
+        return jsonify({"success": True, "action": action, "device_key": device_key})
+    except HAError as e:
+        return jsonify({"error": str(e)}), 502
 
-        entities = []
-        for item in response.json():
-            entity_id = item.get("entity_id") or ""
-            if not entity_id.startswith("sensor."):
-                continue
-            attrs = item.get("attributes") or {}
-            unit = str(attrs.get("unit_of_measurement") or "").strip()
-            device_class = str(attrs.get("device_class") or "").lower()
-            unit_key = unit.lower().replace(" ", "")
-            if device_class not in ("power",) and unit_key not in ("w", "kw", "mw", "watt", "kilowatt"):
-                continue
-            entities.append({
-                "entity_id": entity_id,
-                "name": attrs.get("friendly_name") or entity_id,
-                "state": item.get("state"),
-                "unit": unit,
-            })
-        entities.sort(key=lambda x: x["name"])
-        return jsonify({"entities": entities})
-    except Exception as e:
-        return jsonify({"error": f"读取实体失败: {str(e)}"}), 502
 
+# =============================================================================
+# MQTT / MySQL 配置
+# =============================================================================
 
 @app.route("/api/config/mqtt", methods=["GET"])
-@login_required
 def get_mqtt_config_api():
     config = load_mqtt_config()
     return jsonify({
@@ -455,18 +439,16 @@ def get_mqtt_config_api():
 
 
 @app.route("/api/config/mqtt", methods=["POST"])
-@login_required
 def save_mqtt_config_api():
     data = request.get_json(silent=True) or {}
     try:
         save_mqtt_config(data)
         return jsonify({"success": True, "message": "配置已保存，重启程序后生效"})
     except Exception as e:
-        return jsonify({"error": f"保存失败: {str(e)}"}), 500
+        return jsonify({"error": "保存失败: %s" % e}), 500
 
 
 @app.route("/api/config/mqtt/test", methods=["POST"])
-@login_required
 def test_mqtt_connection():
     data = request.get_json(silent=True) or {}
     current = load_mqtt_config()
@@ -513,7 +495,7 @@ def test_mqtt_connection():
             return jsonify({"error": "用户名或密码错误"})
         if connected["rc"] is None:
             return jsonify({"error": "MQTT 握手超时"})
-        return jsonify({"error": f"连接失败，返回码: {connected['rc']}"})
+        return jsonify({"error": "连接失败，返回码: %s" % connected["rc"]})
     except TimeoutError:
         return jsonify({"error": "连接超时，请检查服务器地址和端口"})
     except Exception as e:
@@ -522,139 +504,95 @@ def test_mqtt_connection():
             return jsonify({"error": "连接超时，请检查服务器地址和端口"})
         if "refused" in error_msg.lower():
             return jsonify({"error": "连接被拒绝，请检查服务器是否运行"})
-        return jsonify({"error": f"连接失败: {error_msg}"})
+        return jsonify({"error": "连接失败: %s" % error_msg})
 
 
-@app.route("/api/switch", methods=["POST"])
-@login_required
-def control_switch():
+@app.route("/api/config/mysql", methods=["GET"])
+def get_mysql_config_api():
+    config = load_mysql_config()
+    return jsonify({
+        "host": config.get("host", ""),
+        "port": config.get("port", 3306),
+        "database": config.get("database", "electricity_monitor"),
+        "user": config.get("user", ""),
+        "password_set": bool(config.get("password")),
+    })
+
+
+@app.route("/api/config/mysql", methods=["POST"])
+def save_mysql_config_api():
     data = request.get_json(silent=True) or {}
-    action = data.get("action")
-    switch_id = data.get("switch_id", "main")
-    if action not in ["on", "off"]:
-        return jsonify({"error": "无效的操作"}), 400
-    success = _send_switch_command(switch_id, action)
-    if success:
-        return jsonify({"success": True, "action": action, "switch_id": switch_id})
-    return jsonify({"error": "MQTT发送失败"}), 500
+    host = (data.get("host") or "").strip()
+    database = (data.get("database") or "electricity_monitor").strip()
+    user = (data.get("user") or "").strip()
+    if not host or not database or not user:
+        return jsonify({"error": "请填写数据库地址、数据库名和用户名"}), 400
+    try:
+        save_mysql_config(data)
+        return jsonify({"success": True, "message": "配置已保存，重启程序后生效"})
+    except Exception as e:
+        return jsonify({"error": "保存失败: %s" % e}), 500
 
+
+@app.route("/api/config/mysql/test", methods=["POST"])
+def test_mysql_connection():
+    data = request.get_json(silent=True) or {}
+    current = load_mysql_config()
+    host = (data.get("host") or "").strip()
+    database = (data.get("database") or "").strip()
+    user = (data.get("user") or "").strip()
+    password = (data.get("password") or "").strip() or current.get("password", "")
+    try:
+        port = int(data.get("port") or 3306)
+    except (TypeError, ValueError):
+        port = 3306
+
+    if not host or not database or not user:
+        return jsonify({"error": "请填写完整信息"}), 400
+
+    try:
+        import pymysql
+
+        conn = pymysql.connect(
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            database=database,
+            charset="utf8mb4",
+            connect_timeout=5,
+        )
+        conn.close()
+        return jsonify({"success": True, "message": "连接成功！"})
+    except ImportError:
+        return jsonify({"error": "请先安装 pymysql: pip install pymysql"})
+    except Exception as e:
+        error_msg = str(e)
+        if "Unknown database" in error_msg:
+            return jsonify({"error": "数据库 '%s' 不存在，请先手动创建" % database})
+        if "Access denied" in error_msg:
+            return jsonify({"error": "用户名或密码错误"})
+        if "Connection refused" in error_msg:
+            return jsonify({"error": "连接被拒绝，请检查 MySQL 是否运行"})
+        return jsonify({"error": "连接失败: %s" % error_msg})
+
+
+# =============================================================================
+# WebSocket
+# =============================================================================
 
 @socketio.on("connect")
 def handle_connect():
-    if not is_authenticated():
-        return False
-    _update_latest_data()
-    emit("data_update", latest_data)
+    emit("data_update", _realtime_payload())
 
 
 @socketio.on("request_data")
 def handle_request_data():
-    if not is_authenticated():
-        return
-    _update_latest_data()
-    emit("data_update", latest_data)
-
-
-def _update_latest_data():
-    global latest_data
-    try:
-        if STATE_FILE.exists():
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
-                state = json.load(f)
-            latest_data["power_w"] = state.get("current_power_w", 0.0)
-            latest_data["total_energy_kwh"] = state.get("total_energy_kwh", 0.0)
-            latest_data["today_energy_kwh"] = state.get("today_energy_kwh", 0.0)
-            latest_data["month_energy_kwh"] = state.get("month_energy_kwh", 0.0)
-            latest_data["last_update"] = datetime.now().isoformat()
-    except Exception as e:
-        print(f"读取状态文件失败: {e}")
-
-
-def _read_csv_records(date) -> list:
-    mysql_config = load_mysql_config()
-    if mysql_config.get("host"):
-        try:
-            import pymysql
-
-            conn = pymysql.connect(
-                host=mysql_config["host"],
-                port=mysql_config.get("port", 3306),
-                user=mysql_config["user"],
-                password=mysql_config.get("password", ""),
-                database=mysql_config["database"],
-                charset="utf8mb4",
-            )
-            cursor = conn.cursor()
-            date_str = date[:10] if isinstance(date, str) else date.strftime("%Y-%m-%d")
-            cursor.execute(
-                """
-                SELECT record_time, power_w, total_energy_kwh
-                FROM electricity_records
-                WHERE DATE(record_time) = %s
-                ORDER BY record_time
-                """,
-                (date_str,),
-            )
-            records = []
-            for row in cursor.fetchall():
-                records.append({
-                    "timestamp": row[0].strftime("%Y-%m-%d %H:%M:%S"),
-                    "power_w": float(row[1]),
-                    "total_energy_kwh": float(row[2]),
-                })
-            cursor.close()
-            conn.close()
-            if records:
-                return records
-        except Exception as e:
-            print(f"MySQL读取失败，回退到CSV: {e}")
-
-    csv_path = DATA_DIR / f"electricity_{date.year}-{date.month:02d}.csv"
-    if not csv_path.exists():
-        return []
-
-    records = []
-    date_str = date.strftime("%Y-%m-%d")
-    try:
-        with open(csv_path, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if row["timestamp"].startswith(date_str):
-                    records.append({
-                        "timestamp": row["timestamp"],
-                        "power_w": float(row["power_w"]),
-                        "total_energy_kwh": float(row["total_energy_kwh"]),
-                    })
-    except Exception as e:
-        print(f"读取CSV失败: {e}")
-    return records
-
-
-def _send_switch_command(switch_id: str, action: str) -> bool:
-    try:
-        import paho.mqtt.client as mqtt
-
-        mqtt_config = load_mqtt_config()
-        if not mqtt_config.get("broker"):
-            print("未配置 MQTT，无法发送控制命令")
-            return False
-
-        client = mqtt.Client(client_id="web_control", protocol=mqtt.MQTTv311)
-        if mqtt_config.get("username"):
-            client.username_pw_set(mqtt_config["username"], mqtt_config.get("password"))
-        client.connect(mqtt_config["broker"], mqtt_config["port"], keepalive=5)
-        topic = f"home/switch/{switch_id}/set"
-        payload = json.dumps({"state": action.upper()})
-        client.publish(topic, payload, qos=1)
-        client.disconnect()
-        return True
-    except Exception as e:
-        print(f"发送控制命令失败: {e}")
-        return False
+    emit("data_update", _realtime_payload())
 
 
 def start_web_server():
-    print(f"Web服务器启动: http://localhost:{WEB_CONFIG['port']}")
+    print("Web 服务器启动: http://localhost:%s" % WEB_CONFIG["port"])
     socketio.run(
         app,
         host=WEB_CONFIG["host"],

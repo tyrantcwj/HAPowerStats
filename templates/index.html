@@ -7,32 +7,24 @@
     <script src="/static/chart.umd.min.js"></script>
     <script src="/static/socket.io.min.js"></script>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             min-height: 100vh;
             color: #fff;
         }
-        
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        
+
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+
         header {
             text-align: center;
             padding: 20px 0;
             border-bottom: 1px solid rgba(255,255,255,0.1);
             margin-bottom: 30px;
         }
-        
+
         header h1 {
             font-size: 2em;
             background: linear-gradient(90deg, #00d4ff, #00ff88);
@@ -40,7 +32,7 @@
             -webkit-text-fill-color: transparent;
             background-clip: text;
         }
-        
+
         .status-bar {
             display: flex;
             justify-content: center;
@@ -48,204 +40,151 @@
             margin-top: 10px;
             font-size: 0.9em;
             color: #888;
+            flex-wrap: wrap;
         }
-        
+
         .status-dot {
-            width: 8px;
-            height: 8px;
+            width: 8px; height: 8px;
             border-radius: 50%;
             display: inline-block;
             margin-right: 5px;
         }
-        
         .status-dot.online { background: #00ff88; }
         .status-dot.offline { background: #ff4444; }
-        
+
         /* 数据卡片 */
         .cards {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
             gap: 20px;
             margin-bottom: 30px;
         }
-        
+
         .card {
             background: rgba(255,255,255,0.05);
             border-radius: 16px;
             padding: 25px;
-            backdrop-filter: blur(10px);
             border: 1px solid rgba(255,255,255,0.1);
             transition: transform 0.3s, box-shadow 0.3s;
         }
-        
-        .card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 30px rgba(0,212,255,0.2);
-        }
-        
-        .card-icon {
-            font-size: 2.5em;
-            margin-bottom: 15px;
-        }
-        
-        .card-title {
-            font-size: 0.9em;
-            color: #888;
-            margin-bottom: 10px;
-        }
-        
-        .card-value {
-            font-size: 2.2em;
-            font-weight: bold;
-            color: #00d4ff;
-        }
-        
-        .card-unit {
-            font-size: 0.5em;
-            color: #888;
-            margin-left: 5px;
-        }
-        
+        .card:hover { transform: translateY(-5px); box-shadow: 0 10px 30px rgba(0,212,255,0.2); }
+        .card-icon { font-size: 2.2em; margin-bottom: 12px; }
+        .card-title { font-size: 0.9em; color: #888; margin-bottom: 10px; }
+        .card-value { font-size: 2em; font-weight: bold; color: #00d4ff; }
+        .card-unit { font-size: 0.5em; color: #888; margin-left: 5px; }
         .card.power .card-value { color: #ffaa00; }
         .card.total .card-value { color: #00ff88; }
         .card.today .card-value { color: #00d4ff; }
         .card.month .card-value { color: #ff6699; }
-        
-        /* 图表区域 */
-        .chart-section {
+
+        /* 面板 */
+        .panel {
             background: rgba(255,255,255,0.05);
             border-radius: 16px;
             padding: 25px;
             margin-bottom: 30px;
             border: 1px solid rgba(255,255,255,0.1);
         }
-        
-        .chart-header {
+
+        .panel-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 20px;
+            gap: 15px;
+            flex-wrap: wrap;
         }
-        
-        .chart-title {
-            font-size: 1.2em;
-            color: #fff;
-        }
-        
-        .chart-container {
-            position: relative;
-            height: 300px;
-        }
-        
-        /* 控制面板 */
-        .control-section {
+
+        .panel-title { font-size: 1.15em; color: #fff; }
+        .panel-subtitle { font-size: 0.85em; color: #777; margin-top: 4px; }
+
+        .chart-container { position: relative; height: 320px; }
+
+        /* 插座卡片 */
+        .device-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
             gap: 20px;
-            margin-bottom: 30px;
         }
-        
-        .control-panel {
-            background: rgba(255,255,255,0.05);
-            border-radius: 16px;
-            padding: 25px;
+
+        .device-card {
+            background: rgba(0,0,0,0.25);
             border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 14px;
+            padding: 20px;
         }
-        
-        .panel-title {
-            font-size: 1.1em;
-            margin-bottom: 20px;
-            color: #fff;
+        .device-card.offline { opacity: 0.6; border-style: dashed; }
+
+        .device-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 10px;
+            margin-bottom: 15px;
         }
-        
-        /* 开关按钮 */
+        .device-name { font-size: 1.05em; font-weight: 600; }
+        .device-meta { font-size: 0.78em; color: #777; margin-top: 4px; }
+
+        .device-power {
+            font-size: 2em;
+            font-weight: bold;
+            color: #ffaa00;
+            margin-bottom: 12px;
+        }
+        .device-power span { font-size: 0.45em; color: #888; margin-left: 4px; }
+
+        .device-metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+        .metric { background: rgba(255,255,255,0.04); border-radius: 8px; padding: 8px 10px; }
+        .metric-label { font-size: 0.72em; color: #888; }
+        .metric-value { font-size: 1em; color: #00d4ff; margin-top: 3px; }
+
+        .chip {
+            display: inline-block;
+            padding: 3px 9px;
+            border-radius: 20px;
+            font-size: 0.72em;
+            background: rgba(0,212,255,0.15);
+            color: #7fe3ff;
+            border: 1px solid rgba(0,212,255,0.25);
+            margin: 3px 5px 3px 0;
+        }
+        .chip.gray { background: rgba(255,255,255,0.06); color: #999; border-color: rgba(255,255,255,0.12); }
+        .chip.green { background: rgba(0,255,136,0.15); color: #7dffc0; border-color: rgba(0,255,136,0.25); }
+
+        /* 开关 */
         .switch-group {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 15px;
+            padding: 12px 15px;
             background: rgba(0,0,0,0.2);
             border-radius: 10px;
             margin-bottom: 10px;
         }
-        
-        .switch-label {
-            font-size: 1em;
-        }
-        
-        .switch {
-            position: relative;
-            width: 60px;
-            height: 30px;
-        }
-        
-        .switch input {
-            opacity: 0;
-            width: 0;
-            height: 0;
-        }
-        
+        .switch { position: relative; width: 56px; height: 28px; flex: none; }
+        .switch input { opacity: 0; width: 0; height: 0; }
         .slider {
-            position: absolute;
-            cursor: pointer;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-color: #333;
-            transition: 0.4s;
-            border-radius: 30px;
+            position: absolute; cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #333; transition: 0.4s; border-radius: 30px;
         }
-        
         .slider:before {
-            position: absolute;
-            content: "";
-            height: 22px;
-            width: 22px;
-            left: 4px;
-            bottom: 4px;
-            background-color: white;
-            transition: 0.4s;
-            border-radius: 50%;
+            position: absolute; content: "";
+            height: 20px; width: 20px; left: 4px; bottom: 4px;
+            background-color: white; transition: 0.4s; border-radius: 50%;
         }
-        
-        input:checked + .slider {
-            background-color: #00ff88;
-        }
-        
-        input:checked + .slider:before {
-            transform: translateX(30px);
-        }
-        
-        /* 历史查询 */
-        .history-panel {
-            background: rgba(255,255,255,0.05);
-            border-radius: 16px;
-            padding: 25px;
-            border: 1px solid rgba(255,255,255,0.1);
-            margin-bottom: 30px;
-        }
-        
-        .history-controls {
-            display: flex;
-            gap: 15px;
-            margin-bottom: 20px;
-            flex-wrap: wrap;
-            align-items: center;
-        }
-        
-        .form-group {
-            display: flex;
-            flex-direction: column;
-        }
-        
-        .form-label {
-            font-size: 0.85em;
-            color: #888;
-            margin-bottom: 5px;
-        }
-        
-        .form-input {
+        input:checked + .slider { background-color: #00ff88; }
+        input:checked + .slider:before { transform: translateX(28px); }
+
+        /* 表单 */
+        .form-group { display: flex; flex-direction: column; }
+        .form-label { font-size: 0.85em; color: #888; margin-bottom: 5px; }
+        .form-input, .form-row input, .form-row select {
             padding: 10px 15px;
             border: 1px solid rgba(255,255,255,0.2);
             border-radius: 8px;
@@ -253,7 +192,22 @@
             color: #fff;
             font-size: 1em;
         }
-        
+        .form-row { margin-bottom: 20px; }
+        .form-row label { display: block; margin-bottom: 8px; color: #aaa; font-size: 0.9em; }
+        .form-row input, .form-row select { width: 100%; }
+        .form-row input:focus, .form-row select:focus { outline: none; border-color: #00d4ff; }
+        .form-hint { font-size: 0.8em; color: #666; margin-top: 5px; }
+        .form-actions { display: flex; gap: 15px; margin-top: 25px; flex-wrap: wrap; }
+        .settings-form { max-width: 640px; }
+
+        .controls-row {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            align-items: flex-end;
+        }
+
         .btn {
             padding: 10px 20px;
             border: none;
@@ -262,1374 +216,1012 @@
             font-size: 1em;
             transition: all 0.3s;
         }
-        
-        .btn-primary {
-            background: linear-gradient(90deg, #00d4ff, #0099cc);
-            color: #fff;
-        }
-        
-        .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 20px rgba(0,212,255,0.4);
-        }
-        
-        .btn-success {
-            background: linear-gradient(90deg, #00ff88, #00cc6a);
-            color: #fff;
-        }
-        
-        .btn-success:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 20px rgba(0,255,136,0.4);
-        }
-        
-        /* 数据表格 */
-        .data-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 15px;
-        }
-        
-        .data-table th,
-        .data-table td {
-            padding: 12px 15px;
-            text-align: left;
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-primary { background: linear-gradient(90deg, #00d4ff, #0099cc); color: #fff; }
+        .btn-primary:hover:enabled { transform: translateY(-2px); box-shadow: 0 5px 20px rgba(0,212,255,0.4); }
+        .btn-success { background: linear-gradient(90deg, #00ff88, #00cc6a); color: #fff; }
+        .btn-success:hover:enabled { transform: translateY(-2px); box-shadow: 0 5px 20px rgba(0,255,136,0.4); }
+        .btn-ghost { background: rgba(255,255,255,0.08); color: #ddd; }
+        .btn-ghost:hover:enabled { background: rgba(255,255,255,0.15); }
+        .btn-danger { background: rgba(255,68,68,0.2); color: #ff8080; border: 1px solid rgba(255,68,68,0.3); }
+        .btn-sm { padding: 6px 12px; font-size: 0.85em; }
+
+        /* 表格 */
+        .data-table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        .data-table th, .data-table td {
+            padding: 10px 14px; text-align: left;
             border-bottom: 1px solid rgba(255,255,255,0.1);
         }
-        
-        .data-table th {
-            background: rgba(0,0,0,0.3);
-            color: #00d4ff;
-            font-weight: 500;
-        }
-        
-        .data-table tr:hover {
-            background: rgba(255,255,255,0.05);
-        }
-        
-        .data-table td {
-            color: #ccc;
-        }
-        
-        /* 统计信息 */
+        .data-table th { background: rgba(0,0,0,0.3); color: #00d4ff; font-weight: 500; }
+        .data-table tr:hover { background: rgba(255,255,255,0.05); }
+        .data-table td { color: #ccc; }
+        .table-wrap { max-height: 480px; overflow: auto; }
+
         .stats-row {
-            display: flex;
-            gap: 30px;
-            margin-top: 20px;
-            padding: 15px;
-            background: rgba(0,0,0,0.2);
-            border-radius: 10px;
+            display: flex; gap: 30px; margin-top: 20px; padding: 15px;
+            background: rgba(0,0,0,0.2); border-radius: 10px; flex-wrap: wrap;
         }
-        
-        .stat-item {
-            text-align: center;
-        }
-        
-        .stat-value {
-            font-size: 1.5em;
-            font-weight: bold;
-            color: #00d4ff;
-        }
-        
-        .stat-label {
-            font-size: 0.85em;
-            color: #888;
-            margin-top: 5px;
-        }
-        
-        /* 导航栏 */
+        .stat-item { text-align: center; }
+        .stat-value { font-size: 1.4em; font-weight: bold; color: #00d4ff; }
+        .stat-label { font-size: 0.85em; color: #888; margin-top: 5px; }
+
+        /* 导航 */
         .navbar {
-            display: flex;
-            justify-content: center;
-            gap: 10px;
-            margin-bottom: 30px;
-            background: rgba(0,0,0,0.2);
-            padding: 10px;
-            border-radius: 12px;
+            display: flex; justify-content: center; gap: 10px; margin-bottom: 30px;
+            background: rgba(0,0,0,0.2); padding: 10px; border-radius: 12px; flex-wrap: wrap;
         }
-        
         .nav-btn {
-            padding: 10px 25px;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 1em;
-            background: transparent;
-            color: #888;
-            transition: all 0.3s;
+            padding: 10px 25px; border: none; border-radius: 8px; cursor: pointer;
+            font-size: 1em; background: transparent; color: #888; transition: all 0.3s;
         }
-        
-        .nav-btn:hover {
-            color: #fff;
-            background: rgba(255,255,255,0.1);
+        .nav-btn:hover { color: #fff; background: rgba(255,255,255,0.1); }
+        .nav-btn.active { background: linear-gradient(90deg, #00d4ff, #0099cc); color: #fff; }
+
+        .page { display: none; }
+        .page.active { display: block; }
+
+        /* 扫描结果 */
+        .scan-item {
+            display: flex; gap: 14px; align-items: flex-start;
+            padding: 14px; border-radius: 10px;
+            background: rgba(0,0,0,0.2); margin-bottom: 10px;
+            border: 1px solid rgba(255,255,255,0.08);
         }
-        
-        .nav-btn.active {
-            background: linear-gradient(90deg, #00d4ff, #0099cc);
-            color: #fff;
+        .scan-item.added { border-color: rgba(0,255,136,0.3); }
+        .scan-item input[type=checkbox] { width: 18px; height: 18px; margin-top: 3px; flex: none; }
+        .scan-title { font-size: 1em; font-weight: 600; }
+        .scan-sub { font-size: 0.78em; color: #777; margin: 4px 0 6px; }
+
+        .entity-row {
+            display: flex; gap: 10px; align-items: center;
+            margin-bottom: 8px; flex-wrap: wrap;
         }
-        
-        /* 页面容器 */
-        .page {
-            display: none;
-        }
-        
-        .page.active {
-            display: block;
-        }
-        
-        /* 设置表单 */
-        .settings-form {
-            max-width: 600px;
-            margin: 0 auto;
-        }
-        
-        .form-row {
-            margin-bottom: 20px;
-        }
-        
-        .form-row label {
-            display: block;
-            margin-bottom: 8px;
-            color: #aaa;
-            font-size: 0.9em;
-        }
-        
-        .form-row input,
-        .form-row select {
-            width: 100%;
-            padding: 12px 15px;
-            border: 1px solid rgba(255,255,255,0.2);
-            border-radius: 8px;
-            background: rgba(0,0,0,0.3);
-            color: #fff;
-            font-size: 1em;
-        }
-        
-        .form-row input:focus {
-            outline: none;
-            border-color: #00d4ff;
-        }
-        
-        .form-hint {
-            font-size: 0.8em;
-            color: #666;
-            margin-top: 5px;
-        }
-        
-        .form-actions {
-            display: flex;
-            gap: 15px;
-            margin-top: 30px;
-        }
-        
-        .connection-status {
-            padding: 15px;
-            border-radius: 10px;
-            margin-top: 20px;
-            text-align: center;
-        }
-        
-        .connection-status.success {
-            background: rgba(0,255,136,0.2);
-            color: #00ff88;
-            border: 1px solid rgba(0,255,136,0.3);
-        }
-        
-        .connection-status.error {
-            background: rgba(255,68,68,0.2);
-            color: #ff4444;
-            border: 1px solid rgba(255,68,68,0.3);
-        }
-        
-        .connection-status.testing {
-            background: rgba(0,212,255,0.2);
-            color: #00d4ff;
-            border: 1px solid rgba(0,212,255,0.3);
-        }
-        
-        /* 页脚 */
+        .entity-role { font-size: 0.8em; color: #888; width: 70px; flex: none; }
+        .entity-id { font-size: 0.8em; color: #9ad; font-family: Consolas, monospace; }
+
+        .connection-status { padding: 14px; border-radius: 10px; margin-top: 18px; text-align: center; }
+        .connection-status.success { background: rgba(0,255,136,0.2); color: #00ff88; border: 1px solid rgba(0,255,136,0.3); }
+        .connection-status.error { background: rgba(255,68,68,0.2); color: #ff4444; border: 1px solid rgba(255,68,68,0.3); }
+        .connection-status.testing { background: rgba(0,212,255,0.2); color: #00d4ff; border: 1px solid rgba(0,212,255,0.3); }
+
         footer {
-            text-align: center;
-            padding: 20px;
-            color: #666;
-            font-size: 0.85em;
-            border-top: 1px solid rgba(255,255,255,0.1);
-            margin-top: 40px;
+            text-align: center; padding: 20px; color: #666; font-size: 0.85em;
+            border-top: 1px solid rgba(255,255,255,0.1); margin-top: 40px;
         }
-        
-        /* 响应式 */
-        @media (max-width: 768px) {
-            .cards {
-                grid-template-columns: 1fr;
-            }
-            
-            .chart-container {
-                height: 250px;
-            }
-            
-            .history-controls {
-                flex-direction: column;
-            }
-            
-            .data-table {
-                font-size: 0.9em;
-            }
-            
-            .data-table th,
-            .data-table td {
-                padding: 8px 10px;
-            }
-        }
-        
-        /* 加载动画 */
-        .loading {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100px;
-        }
-        
+
+        .loading { display: flex; justify-content: center; align-items: center; height: 100px; }
         .spinner {
-            width: 40px;
-            height: 40px;
+            width: 36px; height: 36px;
             border: 4px solid rgba(255,255,255,0.1);
-            border-top-color: #00d4ff;
-            border-radius: 50%;
+            border-top-color: #00d4ff; border-radius: 50%;
             animation: spin 1s linear infinite;
         }
-        
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-        
-        /* 无数据提示 */
-        .no-data {
-            text-align: center;
-            padding: 40px;
-            color: #888;
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .no-data { text-align: center; padding: 36px; color: #888; }
+
+        @media (max-width: 768px) {
+            .cards { grid-template-columns: 1fr; }
+            .device-grid { grid-template-columns: 1fr; }
+            .chart-container { height: 250px; }
+            .controls-row { flex-direction: column; align-items: stretch; }
+            .data-table { font-size: 0.9em; }
+            .data-table th, .data-table td { padding: 8px 10px; }
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <!-- 页头 -->
         <header>
-            <h1>⚡ 家庭用电监控系统</h1>
+            <h1>⚡ 家庭用电监控</h1>
             <div class="status-bar">
                 <span>
                     <span class="status-dot" id="statusDot"></span>
                     <span id="statusText">连接中...</span>
                 </span>
+                <span>插座: <span id="deviceCount">0</span> 个（在线 <span id="onlineCount">0</span>）</span>
                 <span>最后更新: <span id="lastUpdate">--</span></span>
-                <span><a href="#" onclick="logout(); return false;" style="color:#00d4ff; text-decoration:none;">退出登录</a></span>
             </div>
         </header>
-        
-        <!-- 导航栏 -->
+
         <div class="navbar">
-            <button class="nav-btn active" onclick="showPage('monitor')">📊 监控面板</button>
-            <button class="nav-btn" onclick="showPage('history')">🔍 历史查询</button>
-            <button class="nav-btn" onclick="showPage('settings')">⚙️ 系统设置</button>
+            <button class="nav-btn active" onclick="showPage('monitor', this)">📊 实时监控</button>
+            <button class="nav-btn" onclick="showPage('history', this)">📜 历史数据</button>
+            <button class="nav-btn" onclick="showPage('settings', this)">⚙️ 系统设置</button>
         </div>
-        
-        <!-- ==================== 监控面板页面 ==================== -->
+
+        <!-- ================= 实时监控 ================= -->
         <div id="page-monitor" class="page active">
-            <!-- 数据卡片 -->
-        <div class="cards">
-            <div class="card power">
-                <div class="card-icon">⚡</div>
-                <div class="card-title">实时功率</div>
-                <div class="card-value">
-                    <span id="powerValue">0.00</span>
-                    <span class="card-unit">W</span>
+            <div class="cards">
+                <div class="card power">
+                    <div class="card-icon">⚡</div>
+                    <div class="card-title">合计实时功率</div>
+                    <div class="card-value"><span id="powerValue">0.00</span><span class="card-unit">W</span></div>
+                </div>
+                <div class="card total">
+                    <div class="card-icon">🔋</div>
+                    <div class="card-title">合计总电能</div>
+                    <div class="card-value"><span id="totalValue">0.0000</span><span class="card-unit">kWh</span></div>
+                </div>
+                <div class="card today">
+                    <div class="card-icon">📅</div>
+                    <div class="card-title">今日用电</div>
+                    <div class="card-value"><span id="todayValue">0.0000</span><span class="card-unit">kWh</span></div>
+                </div>
+                <div class="card month">
+                    <div class="card-icon">📆</div>
+                    <div class="card-title">本月用电</div>
+                    <div class="card-value"><span id="monthValue">0.0000</span><span class="card-unit">kWh</span></div>
                 </div>
             </div>
-            <div class="card total">
-                <div class="card-icon">🔋</div>
-                <div class="card-title">总累计电能</div>
-                <div class="card-value">
-                    <span id="totalValue">0.0000</span>
-                    <span class="card-unit">kWh</span>
+
+            <div class="panel">
+                <div class="panel-header">
+                    <div>
+                        <div class="panel-title">📈 实时功率趋势</div>
+                        <div class="panel-subtitle">合计曲线 + 每个插座单独曲线</div>
+                    </div>
+                    <span style="color:#888;font-size:0.85em;">最近 60 个采样点</span>
+                </div>
+                <div class="chart-container"><canvas id="powerChart"></canvas></div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header">
+                    <div>
+                        <div class="panel-title">🔌 插座设备</div>
+                        <div class="panel-subtitle">功率、电量、电压、电流等参数由 HA 实体自动导入</div>
+                    </div>
+                    <button class="btn btn-ghost btn-sm" onclick="showPage('settings', document.querySelectorAll('.nav-btn')[2])">添加插座</button>
+                </div>
+                <div id="deviceGrid" class="device-grid">
+                    <div class="no-data">还没有添加插座，请到「系统设置」扫描并勾选</div>
                 </div>
             </div>
-            <div class="card today">
-                <div class="card-icon">📅</div>
-                <div class="card-title">今日用电</div>
-                <div class="card-value">
-                    <span id="todayValue">0.0000</span>
-                    <span class="card-unit">kWh</span>
+
+            <div class="panel">
+                <div class="panel-header"><div class="panel-title">💰 电费估算</div></div>
+                <div class="switch-group">
+                    <span>今日电费</span>
+                    <span style="color:#00ff88;font-weight:bold;">¥ <span id="costToday">0.00</span></span>
                 </div>
-            </div>
-            <div class="card month">
-                <div class="card-icon">📆</div>
-                <div class="card-title">本月用电</div>
-                <div class="card-value">
-                    <span id="monthValue">0.0000</span>
-                    <span class="card-unit">kWh</span>
+                <div class="switch-group">
+                    <span>本月电费</span>
+                    <span style="color:#ff6699;font-weight:bold;">¥ <span id="costMonth">0.00</span></span>
+                </div>
+                <div class="switch-group">
+                    <span>电价 (元/kWh)</span>
+                    <input type="number" id="electricityPrice" value="0.56" step="0.01"
+                           style="width:110px;padding:6px 10px;background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.2);border-radius:6px;color:#fff;"
+                           onchange="onPriceChange()">
                 </div>
             </div>
         </div>
-        
-        <!-- 实时功率图表 -->
-        <div class="chart-section">
-            <div class="chart-header">
-                <h2 class="chart-title">📈 功率趋势 (最近60个数据点)</h2>
-            </div>
-            <div class="chart-container">
-                <canvas id="powerChart"></canvas>
-            </div>
-        </div>
-        
-        <!-- 控制面板 -->
-        <div class="control-section">
-            <!-- 插座控制 -->
-            <div class="control-panel">
-                <h3 class="panel-title">🔌 插座控制</h3>
-                <div class="switch-group">
-                    <span class="switch-label">智能插座 1</span>
-                    <label class="switch">
-                        <input type="checkbox" id="switch1" onchange="toggleSwitch('switch1', this.checked)">
-                        <span class="slider"></span>
-                    </label>
-                </div>
-                <div class="switch-group">
-                    <span class="switch-label">智能插座 2</span>
-                    <label class="switch">
-                        <input type="checkbox" id="switch2" onchange="toggleSwitch('switch2', this.checked)">
-                        <span class="slider"></span>
-                    </label>
-                </div>
-                <div class="switch-group">
-                    <span class="switch-label">总开关</span>
-                    <label class="switch">
-                        <input type="checkbox" id="switchMain" onchange="toggleSwitch('main', this.checked)">
-                        <span class="slider"></span>
-                    </label>
-                </div>
-            </div>
-            
-            <!-- 快捷统计 -->
-            <div class="control-panel">
-                <h3 class="panel-title">📊 用电估算</h3>
-                <div class="switch-group">
-                    <span class="switch-label">今日电费估算</span>
-                    <span style="color: #00ff88; font-weight: bold;">¥ <span id="costToday">0.00</span></span>
-                </div>
-                <div class="switch-group">
-                    <span class="switch-label">本月电费估算</span>
-                    <span style="color: #ff6699; font-weight: bold;">¥ <span id="costMonth">0.00</span></span>
-                </div>
-                <div class="switch-group">
-                    <span class="switch-label">电价 (元/kWh)</span>
-                    <input type="number" id="electricityPrice" value="0.56" step="0.01" 
-                           style="width: 80px; padding: 5px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.2); border-radius: 5px; color: #fff;"
-                           onchange="updateCostEstimate()">
-                </div>
-            </div>
-        </div>
-        
-        <!-- 历史查询 -->
-        <div class="history-panel">
-            <h3 class="panel-title">🔍 历史数据查询</h3>
-            <div class="history-controls">
-                <div class="form-group">
-                    <label class="form-label">查询日期</label>
-                    <input type="date" id="queryDate" class="form-input" value="">
-                </div>
-                <button class="btn btn-primary" onclick="queryHistory()">查询</button>
-                <button class="btn btn-success" onclick="exportCSV()">导出CSV</button>
-            </div>
-            
-            <div id="historyStats" class="stats-row" style="display: none;">
-                <div class="stat-item">
-                    <div class="stat-value" id="statCount">0</div>
-                    <div class="stat-label">数据点</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value" id="statMaxPower">0</div>
-                    <div class="stat-label">最大功率 (W)</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value" id="statAvgPower">0</div>
-                    <div class="stat-label">平均功率 (W)</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value" id="statEnergy">0</div>
-                    <div class="stat-label">当日用电 (kWh)</div>
-                </div>
-            </div>
-            
-            <div id="historyContent">
-                <div class="no-data">请选择日期并点击查询</div>
-            </div>
-        </div>
-        </div> <!-- 结束监控面板页面 -->
-        
-        <!-- ==================== 历史查询页面 ==================== -->
+
+        <!-- ================= 历史数据 ================= -->
         <div id="page-history" class="page">
-            <!-- 历史查询 -->
-            <div class="history-panel">
-                <h3 class="panel-title">🔍 历史数据查询</h3>
-                <div class="history-controls">
+            <div class="panel">
+                <div class="panel-header"><div class="panel-title">📜 历史数据查询</div></div>
+                <div class="controls-row">
                     <div class="form-group">
-                        <label class="form-label">查询日期</label>
-                        <input type="date" id="queryDate2" class="form-input" value="">
+                        <label class="form-label">插座</label>
+                        <select id="historyDevice" class="form-input"><option value="">全部（合计）</option></select>
                     </div>
-                    <button class="btn btn-primary" onclick="queryHistory2()">查询</button>
-                    <button class="btn btn-success" onclick="exportCSV2()">导出CSV</button>
+                    <div class="form-group">
+                        <label class="form-label">日期</label>
+                        <input type="date" id="queryDate" class="form-input">
+                    </div>
+                    <button class="btn btn-primary" onclick="queryHistory()">🔍 查询</button>
+                    <button class="btn btn-success" onclick="exportCSV()">📥 导出本月 CSV</button>
                 </div>
-                
-                <div id="historyStats2" class="stats-row" style="display: none;">
-                    <div class="stat-item">
-                        <div class="stat-value" id="statCount2">0</div>
-                        <div class="stat-label">数据点</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-value" id="statMaxPower2">0</div>
-                        <div class="stat-label">最大功率 (W)</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-value" id="statAvgPower2">0</div>
-                        <div class="stat-label">平均功率 (W)</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-value" id="statEnergy2">0</div>
-                        <div class="stat-label">当日用电 (kWh)</div>
-                    </div>
+
+                <div id="historyStats" class="stats-row" style="display:none;">
+                    <div class="stat-item"><div class="stat-value" id="statCount">0</div><div class="stat-label">数据点</div></div>
+                    <div class="stat-item"><div class="stat-value" id="statMaxPower">0</div><div class="stat-label">最大功率 (W)</div></div>
+                    <div class="stat-item"><div class="stat-value" id="statAvgPower">0</div><div class="stat-label">平均功率 (W)</div></div>
+                    <div class="stat-item"><div class="stat-value" id="statEnergy">0</div><div class="stat-label">当日用电 (kWh)</div></div>
                 </div>
-                
-                <div id="historyContent2">
-                    <div class="no-data">请选择日期并点击查询</div>
-                </div>
+
+                <div id="historyContent"><div class="no-data">请选择日期并点击查询</div></div>
             </div>
         </div>
-        
-        <!-- ==================== 设置页面 ==================== -->
+
+        <!-- ================= 系统设置 ================= -->
         <div id="page-settings" class="page">
-            <!-- HomeAssistant 设置 -->
-            <div class="history-panel">
-                <h3 class="panel-title">🏠 HomeAssistant 设置</h3>
-                
+            <div class="panel">
+                <div class="panel-header">
+                    <div>
+                        <div class="panel-title">🏠 Home Assistant 连接</div>
+                        <div class="panel-subtitle">只需要地址和令牌，设备在下面勾选</div>
+                    </div>
+                </div>
                 <div class="settings-form">
                     <div class="form-row">
-                        <label>HA 地址 *</label>
+                        <label>HA 地址</label>
                         <input type="text" id="haUrl" placeholder="例如: http://192.168.1.100:8123">
-                        <div class="form-hint">HomeAssistant 的访问地址，包含 http:// 和端口</div>
+                        <div class="form-hint">包含 http:// 和端口</div>
                     </div>
-                    
                     <div class="form-row">
-                        <label>访问令牌 (Long-Lived Access Token) *</label>
-                        <input type="password" id="haToken" placeholder="在HA用户资料页面生成">
-                        <div class="form-hint">HA左下角点击用户名 → 长期访问令牌 → 创建令牌</div>
+                        <label>长期访问令牌</label>
+                        <input type="password" id="haToken" placeholder="在 HA 用户资料页面生成">
+                        <div class="form-hint">HA 左下角点击用户名 → 长期访问令牌 → 创建令牌。留空表示沿用已保存的令牌</div>
                     </div>
-
-                    <div class="form-row">
-                        <label>功率实体 ID *</label>
-                        <input type="text" id="haPowerEntity" placeholder="例如: sensor.house_power">
-                        <div class="form-hint">必须是功率传感器（单位 W 或 kW）。保存 HA 地址和令牌后可从下方列表选择。</div>
-                    </div>
-
-                    <div class="form-row">
-                        <label>从 HA 选择功率实体</label>
-                        <select id="haEntitySelect" class="form-input" onchange="applyHaEntity(this.value)">
-                            <option value="">先保存地址和令牌，再点击加载</option>
-                        </select>
-                    </div>
-                    
                     <div class="form-actions">
                         <button class="btn btn-primary" onclick="testHaConnection()">🔗 测试连接</button>
-                        <button class="btn btn-primary" onclick="loadHaEntities()">📋 加载实体</button>
-                        <button class="btn btn-success" onclick="saveHaConfig()">💾 保存配置</button>
+                        <button class="btn btn-success" onclick="saveHaConfig()">💾 保存</button>
                     </div>
-                    
-                    <div id="haTestResult" class="connection-status" style="display: none;"></div>
+                    <div id="haTestResult" class="connection-status" style="display:none;"></div>
                 </div>
             </div>
-            
-            <!-- MQTT 设置 -->
-            <div class="history-panel" style="margin-top: 20px;">
-                <h3 class="panel-title">📡 MQTT 设置（可选）</h3>
-                
+
+            <div class="panel">
+                <div class="panel-header">
+                    <div>
+                        <div class="panel-title">🔍 扫描插座设备</div>
+                        <div class="panel-subtitle">自动识别带功率 / 电量计量的设备，勾选后一键导入</div>
+                    </div>
+                    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+                        <button class="btn btn-primary btn-sm" id="scanBtn" onclick="scanDevices(true)">🔍 扫描设备</button>
+                        <button class="btn btn-success btn-sm" onclick="importSelected()">➕ 导入选中</button>
+                    </div>
+                </div>
+                <div id="scanResult"><div class="no-data">点击「扫描设备」从 HA 读取可用插座</div></div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header">
+                    <div>
+                        <div class="panel-title">🔌 已添加的插座</div>
+                        <div class="panel-subtitle">改名、停用或移除；采集程序会自动生效，无需重启</div>
+                    </div>
+                    <button class="btn btn-ghost btn-sm" onclick="loadDevices()">🔄 刷新</button>
+                </div>
+                <div id="deviceConfigList"><div class="no-data">还没有添加插座</div></div>
+                <div id="deviceSaveResult" class="connection-status" style="display:none;"></div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header">
+                    <div>
+                        <div class="panel-title">📡 MQTT 服务器（可选）</div>
+                        <div class="panel-subtitle">配置后把统计结果回写成 HA 实体</div>
+                    </div>
+                </div>
                 <div class="settings-form">
                     <div class="form-row">
-                        <label>MQTT 服务器地址</label>
+                        <label>服务器地址</label>
                         <input type="text" id="mqttBroker" placeholder="例如: 192.168.1.100">
-                        <div class="form-hint">如果HA安装了MQTT插件，可填写HA的IP地址</div>
+                        <div class="form-hint">如果 HA 安装了 MQTT 插件，可填写 HA 的 IP</div>
                     </div>
-                    
-                    <div class="form-row">
-                        <label>端口</label>
-                        <input type="number" id="mqttPort" value="1883">
-                    </div>
-                    
-                    <div class="form-row">
-                        <label>用户名</label>
-                        <input type="text" id="mqttUsername" placeholder="留空则不使用认证">
-                    </div>
-                    
-                    <div class="form-row">
-                        <label>密码</label>
-                        <input type="password" id="mqttPassword" placeholder="留空则不使用认证">
-                    </div>
-
-                    <div class="form-row">
-                        <label>客户端 ID</label>
-                        <input type="text" id="mqttClientId" value="home_electricity_monitor">
-                    </div>
-                    
+                    <div class="form-row"><label>端口</label><input type="number" id="mqttPort" value="1883"></div>
+                    <div class="form-row"><label>用户名</label><input type="text" id="mqttUsername" placeholder="留空则不使用认证"></div>
+                    <div class="form-row"><label>密码</label><input type="password" id="mqttPassword" placeholder="留空则沿用已保存的"></div>
+                    <div class="form-row"><label>客户端 ID</label><input type="text" id="mqttClientId" value="home_electricity_monitor"></div>
                     <div class="form-actions">
                         <button class="btn btn-primary" onclick="testMqttConnection()">🔗 测试连接</button>
-                        <button class="btn btn-success" onclick="saveMqttConfig()">💾 保存配置</button>
+                        <button class="btn btn-success" onclick="saveMqttConfig()">💾 保存</button>
                     </div>
-                    
-                    <div id="mqttTestResult" class="connection-status" style="display: none;"></div>
-                    
-                    <div class="form-row" style="margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
-                        <div class="form-hint" style="color: #888;">
-                            💡 MQTT 可选。配置后可将统计结果以自动发现方式上报到 Home Assistant。功率采集本身走 HA REST API，不依赖 MQTT。
-                        </div>
-                    </div>
+                    <div id="mqttTestResult" class="connection-status" style="display:none;"></div>
                 </div>
             </div>
-            
-            <!-- MySQL 设置 -->
-            <div class="history-panel" style="margin-top: 20px;">
-                <h3 class="panel-title">🗄️ MySQL 数据库设置（可选）</h3>
-                
+
+            <div class="panel">
+                <div class="panel-header">
+                    <div>
+                        <div class="panel-title">🗄️ MySQL 数据库（可选）</div>
+                        <div class="panel-subtitle">用于长期存储，不配则只写本地 CSV</div>
+                    </div>
+                </div>
                 <div class="settings-form">
+                    <div class="form-row"><label>数据库地址</label><input type="text" id="mysqlHost" placeholder="例如: 192.168.1.200"></div>
+                    <div class="form-row"><label>端口</label><input type="number" id="mysqlPort" value="3306"></div>
                     <div class="form-row">
-                        <label>数据库地址 *</label>
-                        <input type="text" id="mysqlHost" placeholder="例如: 192.168.1.200">
-                    </div>
-                    
-                    <div class="form-row">
-                        <label>端口</label>
-                        <input type="number" id="mysqlPort" value="3306">
-                    </div>
-                    
-                    <div class="form-row">
-                        <label>数据库名 *</label>
+                        <label>数据库名</label>
                         <input type="text" id="mysqlDatabase" value="electricity_monitor">
-                        <div class="form-hint">程序会自动创建数据库和表（需提前手动建库）</div>
+                        <div class="form-hint">表会自动创建，但数据库需要先手动建好</div>
                     </div>
-                    
-                    <div class="form-row">
-                        <label>用户名 *</label>
-                        <input type="text" id="mysqlUser" placeholder="例如: root">
-                    </div>
-                    
-                    <div class="form-row">
-                        <label>密码 *</label>
-                        <input type="password" id="mysqlPassword" placeholder="数据库密码">
-                    </div>
-                    
+                    <div class="form-row"><label>用户名</label><input type="text" id="mysqlUser" placeholder="例如: root"></div>
+                    <div class="form-row"><label>密码</label><input type="password" id="mysqlPassword" placeholder="留空则沿用已保存的"></div>
                     <div class="form-actions">
                         <button class="btn btn-primary" onclick="testMysqlConnection()">🔗 测试连接</button>
-                        <button class="btn btn-success" onclick="saveMysqlConfig()">💾 保存配置</button>
+                        <button class="btn btn-success" onclick="saveMysqlConfig()">💾 保存</button>
                     </div>
-                    
-                    <div id="mysqlTestResult" class="connection-status" style="display: none;"></div>
-                    
-                    <div class="form-row" style="margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
-                        <div class="form-hint" style="color: #888;">
-                            💡 MySQL 是可选的。配置后数据同时保存到MySQL和CSV文件，MySQL可用于长期存储和分析。
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="history-panel" style="margin-top: 20px;">
-                <div class="settings-form">
-                    <div class="form-hint" style="color: #ffaa00;">
-                        ⚠️ 注意：保存配置后需要重启程序才能生效。
-                    </div>
+                    <div id="mysqlTestResult" class="connection-status" style="display:none;"></div>
                 </div>
             </div>
         </div>
-        
-        <!-- 页脚 -->
+
         <footer>
-            <p>家庭用电监控系统 v1.0 | 数据每 <span id="updateInterval">10</span> 秒刷新</p>
+            <p>家庭用电监控系统 v2.0 · 多插座 | 数据每 <span id="updateInterval">10</span> 秒刷新</p>
         </footer>
     </div>
-    
+
     <script>
-        // =============================================================================
-        // 全局变量
-        // =============================================================================
+        // =====================================================================
+        // 全局状态
+        // =====================================================================
+        const MAX_POINTS = 60;
+        const SERIES_COLORS = ['#ffaa00', '#00d4ff', '#00ff88', '#ff6699', '#b98cff', '#ffd166', '#4dd4c4', '#ff8b5e'];
+        const ROLE_LABELS = {
+            power: '功率', energy: '电量', voltage: '电压', current: '电流',
+            power_factor: '功率因数', frequency: '频率', apparent_power: '视在功率', switch: '开关'
+        };
+
         let powerChart = null;
-        let powerData = [];
         let timeLabels = [];
-        const MAX_DATA_POINTS = 60;
-        
-        // Socket.IO 连接
+        let seriesData = {};      // key -> 数组，'__total__' 表示合计
+        let latestPayload = null;
+        let scanDevices_cache = [];
+        let deviceConfigs = [];
+
         const socket = io();
-        
-        // =============================================================================
-        // 初始化
-        // =============================================================================
-        document.addEventListener('DOMContentLoaded', function() {
-            // 设置默认日期为今天
+
+        document.addEventListener('DOMContentLoaded', function () {
             document.getElementById('queryDate').value = new Date().toISOString().split('T')[0];
-            document.getElementById('queryDate2').value = new Date().toISOString().split('T')[0];
-            
-            // 初始化图表
+            const savedPrice = localStorage.getItem('electricityPrice');
+            if (savedPrice) document.getElementById('electricityPrice').value = savedPrice;
+
             initChart();
-            
-            // 加载初始数据
             loadRealtimeData();
-            
-            // 加载HA配置
             loadHaConfig();
-            
-            // 加载MQTT配置
+            loadDevices();
             loadMqttConfig();
-            
-            // 加载MySQL配置
             loadMysqlConfig();
-            
-            // 定时刷新数据（备用，Socket.IO断开时使用）
+
             setInterval(loadRealtimeData, 10000);
         });
-        
-        // =============================================================================
-        // Socket.IO 事件处理
-        // =============================================================================
-        socket.on('connect', function() {
-            console.log('已连接到服务器');
-            document.getElementById('statusDot').className = 'status-dot online';
-            document.getElementById('statusText').textContent = '已连接';
-        });
-        
-        socket.on('disconnect', function() {
-            console.log('与服务器断开连接');
-            document.getElementById('statusDot').className = 'status-dot offline';
-            document.getElementById('statusText').textContent = '已断开';
-        });
-        
-        socket.on('data_update', function(data) {
-            updateDisplay(data);
-        });
-        
-        // =============================================================================
-        // 数据加载和更新
-        // =============================================================================
+
+        socket.on('connect', () => setConnState(true, '已连接'));
+        socket.on('disconnect', () => setConnState(false, '已断开'));
+        socket.on('data_update', updateDisplay);
+
+        function setConnState(online, text) {
+            document.getElementById('statusDot').className = 'status-dot ' + (online ? 'online' : 'offline');
+            document.getElementById('statusText').textContent = text;
+        }
+
+        function fmt(value, digits) {
+            const number = Number(value);
+            return isFinite(number) ? number.toFixed(digits) : '--';
+        }
+
+        function escapeHtml(text) {
+            return String(text === null || text === undefined ? '' : text)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        function showStatus(elementId, type, message) {
+            const box = document.getElementById(elementId);
+            box.style.display = 'block';
+            box.className = 'connection-status ' + type;
+            box.textContent = message;
+        }
+
+        function postJson(url, body) {
+            return fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body || {})
+            }).then(r => r.json());
+        }
+
+        // =====================================================================
+        // 实时数据
+        // =====================================================================
         function loadRealtimeData() {
             fetch('/api/realtime')
-                .then(response => response.json())
-                .then(data => {
-                    updateDisplay(data);
-                    document.getElementById('statusDot').className = 'status-dot online';
-                    document.getElementById('statusText').textContent = '已连接';
-                })
-                .catch(error => {
-                    console.error('加载数据失败:', error);
-                    document.getElementById('statusDot').className = 'status-dot offline';
-                    document.getElementById('statusText').textContent = '连接失败';
-                });
+                .then(r => r.json())
+                .then(data => { updateDisplay(data); setConnState(true, '已连接'); })
+                .catch(() => setConnState(false, '连接失败'));
         }
-        
+
         function updateDisplay(data) {
-            // 更新数值显示
-            document.getElementById('powerValue').textContent = data.power_w.toFixed(2);
-            document.getElementById('totalValue').textContent = data.total_energy_kwh.toFixed(4);
-            document.getElementById('todayValue').textContent = data.today_energy_kwh.toFixed(4);
-            document.getElementById('monthValue').textContent = data.month_energy_kwh.toFixed(4);
-            
-            // 更新最后更新时间
+            if (!data || !data.devices) return;
+            latestPayload = data;
+
+            document.getElementById('powerValue').textContent = fmt(data.power_w, 2);
+            document.getElementById('totalValue').textContent = fmt(data.total_energy_kwh, 4);
+            document.getElementById('todayValue').textContent = fmt(data.today_energy_kwh, 4);
+            document.getElementById('monthValue').textContent = fmt(data.month_energy_kwh, 4);
+            document.getElementById('deviceCount').textContent = data.device_count || 0;
+            document.getElementById('onlineCount').textContent = data.online_count || 0;
+
             if (data.last_update) {
-                const time = new Date(data.last_update);
-                document.getElementById('lastUpdate').textContent = time.toLocaleTimeString();
+                document.getElementById('lastUpdate').textContent = new Date(data.last_update).toLocaleTimeString();
             }
-            
-            // 更新图表
-            updateChart(data.power_w);
-            
-            // 更新电费估算
+
+            renderDeviceCards(data.devices);
+            syncHistoryDeviceOptions(data.devices);
+            pushChartPoint(data);
             updateCostEstimate();
         }
-        
-        // =============================================================================
-        // 图表功能
-        // =============================================================================
+
+        function renderDeviceCards(devices) {
+            const grid = document.getElementById('deviceGrid');
+            if (!devices.length) {
+                grid.innerHTML = '<div class="no-data">还没有添加插座，请到「系统设置」扫描并勾选</div>';
+                return;
+            }
+
+            grid.innerHTML = devices.map(device => {
+                const metrics = [];
+                metrics.push(metricHtml('今日', fmt(device.today_energy_kwh, 3) + ' kWh'));
+                metrics.push(metricHtml('本月', fmt(device.month_energy_kwh, 3) + ' kWh'));
+                metrics.push(metricHtml('累计', fmt(device.total_energy_kwh, 2) + ' kWh'));
+                if (device.voltage_v !== null && device.voltage_v !== undefined) {
+                    metrics.push(metricHtml('电压', fmt(device.voltage_v, 1) + ' V'));
+                }
+                if (device.current_a !== null && device.current_a !== undefined) {
+                    metrics.push(metricHtml('电流', fmt(device.current_a, 3) + ' A'));
+                }
+                if (device.power_factor !== null && device.power_factor !== undefined) {
+                    metrics.push(metricHtml('功率因数', fmt(device.power_factor, 2)));
+                }
+                if (device.frequency_hz !== null && device.frequency_hz !== undefined) {
+                    metrics.push(metricHtml('频率', fmt(device.frequency_hz, 1) + ' Hz'));
+                }
+
+                const sourceChip = device.energy_source === 'entity'
+                    ? '<span class="chip green">电量实体累计</span>'
+                    : '<span class="chip gray">功率积分推算</span>';
+
+                let switchHtml = '';
+                if (device.has_switch) {
+                    const checked = device.switch_state === 'on' ? 'checked' : '';
+                    switchHtml =
+                        '<div class="switch-group" style="margin-top:12px;">' +
+                            '<span>插座开关</span>' +
+                            '<label class="switch">' +
+                                '<input type="checkbox" ' + checked +
+                                ' onchange="toggleSwitch(\'' + escapeHtml(device.key) + '\', this.checked)">' +
+                                '<span class="slider"></span>' +
+                            '</label>' +
+                        '</div>';
+                }
+
+                const statusDot = device.available
+                    ? '<span class="status-dot online"></span>在线'
+                    : '<span class="status-dot offline"></span>离线';
+
+                return '' +
+                    '<div class="device-card ' + (device.available ? '' : 'offline') + '">' +
+                        '<div class="device-head">' +
+                            '<div>' +
+                                '<div class="device-name">' + escapeHtml(device.name) + '</div>' +
+                                '<div class="device-meta">' + escapeHtml(device.model || device.manufacturer || '') + '</div>' +
+                            '</div>' +
+                            '<div style="font-size:0.78em;color:#888;white-space:nowrap;">' + statusDot + '</div>' +
+                        '</div>' +
+                        '<div class="device-power">' + fmt(device.power_w, 1) + '<span>W</span></div>' +
+                        '<div class="device-metrics">' + metrics.join('') + '</div>' +
+                        '<div>' + sourceChip + '</div>' +
+                        switchHtml +
+                    '</div>';
+            }).join('');
+        }
+
+        function metricHtml(label, value) {
+            return '<div class="metric"><div class="metric-label">' + label + '</div>' +
+                   '<div class="metric-value">' + value + '</div></div>';
+        }
+
+        function toggleSwitch(deviceKey, isOn) {
+            postJson('/api/switch', { device_key: deviceKey, action: isOn ? 'on' : 'off' })
+                .then(result => {
+                    if (result.error) {
+                        alert('操作失败: ' + result.error);
+                        loadRealtimeData();
+                    } else {
+                        setTimeout(loadRealtimeData, 1500);
+                    }
+                })
+                .catch(() => alert('网络错误，操作失败'));
+        }
+
+        // =====================================================================
+        // 图表
+        // =====================================================================
         function initChart() {
             const ctx = document.getElementById('powerChart').getContext('2d');
-            
             powerChart = new Chart(ctx, {
                 type: 'line',
-                data: {
-                    labels: timeLabels,
-                    datasets: [{
-                        label: '功率 (W)',
-                        data: powerData,
-                        borderColor: '#00d4ff',
-                        backgroundColor: 'rgba(0, 212, 255, 0.1)',
-                        borderWidth: 2,
-                        fill: true,
-                        tension: 0.4,
-                        pointRadius: 0
-                    }]
-                },
+                data: { labels: [], datasets: [] },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
                     plugins: {
-                        legend: {
-                            display: false
-                        }
+                        legend: { labels: { color: '#aaa', boxWidth: 14 } },
+                        tooltip: { callbacks: { label: c => c.dataset.label + ': ' + c.parsed.y.toFixed(1) + ' W' } }
                     },
                     scales: {
-                        x: {
-                            display: true,
-                            grid: {
-                                color: 'rgba(255,255,255,0.1)'
-                            },
-                            ticks: {
-                                color: '#888',
-                                maxTicksLimit: 10
-                            }
-                        },
+                        x: { ticks: { color: '#888', maxTicksLimit: 10 }, grid: { color: 'rgba(255,255,255,0.05)' } },
                         y: {
-                            display: true,
                             beginAtZero: true,
-                            grid: {
-                                color: 'rgba(255,255,255,0.1)'
-                            },
-                            ticks: {
-                                color: '#888'
-                            }
+                            ticks: { color: '#888', callback: v => v + ' W' },
+                            grid: { color: 'rgba(255,255,255,0.05)' }
                         }
-                    },
-                    animation: {
-                        duration: 300
                     }
                 }
             });
         }
-        
-        function updateChart(power) {
-            const now = new Date();
-            const timeStr = now.toLocaleTimeString();
-            
-            // 添加新数据
-            timeLabels.push(timeStr);
-            powerData.push(power);
-            
-            // 限制数据点数量
-            if (timeLabels.length > MAX_DATA_POINTS) {
-                timeLabels.shift();
-                powerData.shift();
-            }
-            
-            // 更新图表
-            powerChart.update();
-        }
-        
-        // =============================================================================
-        // 插座控制
-        // =============================================================================
-        function toggleSwitch(switchId, isOn) {
-            const action = isOn ? 'on' : 'off';
-            
-            fetch('/api/switch', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    switch_id: switchId,
-                    action: action
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    console.log(`开关 ${switchId} 已${action === 'on' ? '打开' : '关闭'}`);
-                } else {
-                    alert('控制失败: ' + (data.error || '未知错误'));
-                    // 恢复开关状态
-                    document.getElementById(switchId).checked = !isOn;
-                }
-            })
-            .catch(error => {
-                console.error('控制请求失败:', error);
-                alert('控制请求失败，请检查网络连接');
-                document.getElementById(switchId).checked = !isOn;
+
+        function pushChartPoint(data) {
+            const label = new Date().toLocaleTimeString();
+            timeLabels.push(label);
+            if (timeLabels.length > MAX_POINTS) timeLabels.shift();
+
+            const keys = ['__total__'].concat(data.devices.map(d => d.key));
+            const values = { __total__: Number(data.power_w) || 0 };
+            data.devices.forEach(d => { values[d.key] = Number(d.power_w) || 0; });
+
+            keys.forEach(key => {
+                if (!seriesData[key]) seriesData[key] = new Array(timeLabels.length - 1).fill(null);
+                seriesData[key].push(values[key]);
+                if (seriesData[key].length > MAX_POINTS) seriesData[key].shift();
             });
+            Object.keys(seriesData).forEach(key => {
+                if (keys.indexOf(key) === -1) delete seriesData[key];
+            });
+
+            const names = { __total__: '合计' };
+            data.devices.forEach(d => { names[d.key] = d.name; });
+
+            powerChart.data.labels = timeLabels;
+            powerChart.data.datasets = keys.map((key, index) => ({
+                label: names[key],
+                data: seriesData[key],
+                borderColor: key === '__total__' ? '#ffffff' : SERIES_COLORS[index % SERIES_COLORS.length],
+                backgroundColor: 'transparent',
+                borderWidth: key === '__total__' ? 2.5 : 1.8,
+                borderDash: key === '__total__' && data.devices.length > 1 ? [6, 3] : [],
+                tension: 0.35,
+                pointRadius: 0,
+                spanGaps: true
+            }));
+            powerChart.update('none');
         }
-        
-        // =============================================================================
+
+        // =====================================================================
         // 电费估算
-        // =============================================================================
-        function updateCostEstimate() {
-            const price = parseFloat(document.getElementById('electricityPrice').value) || 0.56;
-            const todayEnergy = parseFloat(document.getElementById('todayValue').textContent) || 0;
-            const monthEnergy = parseFloat(document.getElementById('monthValue').textContent) || 0;
-            
-            document.getElementById('costToday').textContent = (todayEnergy * price).toFixed(2);
-            document.getElementById('costMonth').textContent = (monthEnergy * price).toFixed(2);
+        // =====================================================================
+        function onPriceChange() {
+            localStorage.setItem('electricityPrice', document.getElementById('electricityPrice').value);
+            updateCostEstimate();
         }
-        
-        // =============================================================================
-        // 历史查询
-        // =============================================================================
+
+        function updateCostEstimate() {
+            if (!latestPayload) return;
+            const price = parseFloat(document.getElementById('electricityPrice').value) || 0;
+            document.getElementById('costToday').textContent = (latestPayload.today_energy_kwh * price).toFixed(2);
+            document.getElementById('costMonth').textContent = (latestPayload.month_energy_kwh * price).toFixed(2);
+        }
+
+        // =====================================================================
+        // 历史数据
+        // =====================================================================
+        function syncHistoryDeviceOptions(devices) {
+            const select = document.getElementById('historyDevice');
+            const current = select.value;
+            const wanted = ['|全部（合计）'].concat(devices.map(d => d.key + '|' + d.name)).join(',');
+            if (select.dataset.signature === wanted) return;
+            select.dataset.signature = wanted;
+            select.innerHTML = '<option value="">全部（合计）</option>' +
+                devices.map(d => '<option value="' + escapeHtml(d.key) + '">' + escapeHtml(d.name) + '</option>').join('');
+            select.value = current;
+        }
+
         function queryHistory() {
             const date = document.getElementById('queryDate').value;
-            
-            if (!date) {
-                alert('请选择日期');
-                return;
-            }
-            
+            const device = document.getElementById('historyDevice').value;
+            if (!date) { alert('请选择日期'); return; }
+
             document.getElementById('historyContent').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
-            
-            fetch(`/api/history?date=${date}`)
-                .then(response => response.json())
-                .then(data => {
-                    displayHistory(data);
-                })
-                .catch(error => {
-                    console.error('查询失败:', error);
+            fetch('/api/history?date=' + encodeURIComponent(date) + '&device=' + encodeURIComponent(device))
+                .then(r => r.json())
+                .then(displayHistory)
+                .catch(() => {
                     document.getElementById('historyContent').innerHTML = '<div class="no-data">查询失败，请重试</div>';
                 });
         }
-        
+
         function displayHistory(data) {
             const container = document.getElementById('historyContent');
-            const statsRow = document.getElementById('historyStats');
-            
-            if (data.records.length === 0) {
-                container.innerHTML = '<div class="no-data">该日期没有数据</div>';
-                statsRow.style.display = 'none';
+            const stats = document.getElementById('historyStats');
+
+            if (data.error) {
+                container.innerHTML = '<div class="no-data">' + escapeHtml(data.error) + '</div>';
+                stats.style.display = 'none';
                 return;
             }
-            
-            // 计算统计信息
-            const powers = data.records.map(r => r.power_w);
-            const maxPower = Math.max(...powers);
+            const records = data.records || [];
+            if (!records.length) {
+                container.innerHTML = '<div class="no-data">该日期没有数据</div>';
+                stats.style.display = 'none';
+                return;
+            }
+
+            const powers = records.map(r => Number(r.power_w) || 0);
+            const maxPower = Math.max.apply(null, powers);
             const avgPower = powers.reduce((a, b) => a + b, 0) / powers.length;
-            const energyDiff = data.records[data.records.length - 1].total_energy_kwh - 
-                              data.records[0].total_energy_kwh;
-            
-            // 更新统计显示
-            document.getElementById('statCount').textContent = data.count;
+            const energy = Math.max(0, (Number(records[records.length - 1].total_energy_kwh) || 0)
+                                     - (Number(records[0].total_energy_kwh) || 0));
+
+            document.getElementById('statCount').textContent = records.length;
             document.getElementById('statMaxPower').textContent = maxPower.toFixed(1);
             document.getElementById('statAvgPower').textContent = avgPower.toFixed(1);
-            document.getElementById('statEnergy').textContent = Math.max(0, energyDiff).toFixed(4);
-            statsRow.style.display = 'flex';
-            
-            // 生成表格
-            let html = `
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>时间</th>
-                            <th>功率 (W)</th>
-                            <th>累计电能 (kWh)</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-            `;
-            
-            data.records.forEach(record => {
-                html += `
-                    <tr>
-                        <td>${record.timestamp}</td>
-                        <td>${record.power_w.toFixed(2)}</td>
-                        <td>${record.total_energy_kwh.toFixed(4)}</td>
-                    </tr>
-                `;
-            });
-            
-            html += '</tbody></table>';
-            container.innerHTML = html;
-        }
-        
-        // =============================================================================
-        // 导出CSV
-        // =============================================================================
-        function exportCSV() {
-            const date = document.getElementById('queryDate').value;
-            
-            if (!date) {
-                alert('请先选择日期');
-                return;
+            document.getElementById('statEnergy').textContent = energy.toFixed(4);
+            stats.style.display = 'flex';
+
+            const showExtra = records.some(r => r.voltage_v !== null && r.voltage_v !== undefined);
+            const step = Math.max(1, Math.ceil(records.length / 500));
+            let rows = '';
+            for (let i = 0; i < records.length; i += step) {
+                const record = records[i];
+                rows += '<tr><td>' + escapeHtml(record.timestamp) + '</td>' +
+                        '<td>' + fmt(record.power_w, 2) + '</td>' +
+                        '<td>' + fmt(record.total_energy_kwh, 4) + '</td>' +
+                        (showExtra ? '<td>' + fmt(record.voltage_v, 1) + '</td><td>' + fmt(record.current_a, 3) + '</td>' : '') +
+                        '</tr>';
             }
-            
-            const year = date.split('-')[0];
-            const month = date.split('-')[1];
-            
-            window.location.href = `/api/export?year=${year}&month=${month}`;
-        }
-        
-        // =============================================================================
-        // MySQL配置管理
-        // =============================================================================
-        function loadMysqlConfig() {
-            fetch('/api/config/mysql')
-                .then(response => response.json())
-                .then(data => {
-                    document.getElementById('mysqlHost').value = data.host || '';
-                    document.getElementById('mysqlPort').value = data.port || 3306;
-                    document.getElementById('mysqlDatabase').value = data.database || 'electricity_monitor';
-                    document.getElementById('mysqlUser').value = data.user || '';
-                    if (data.password_set) {
-                        document.getElementById('mysqlPassword').placeholder = '已设置，留空则保持不变';
-                    }
-                })
-                .catch(error => {
-                    console.error('加载MySQL配置失败:', error);
-                });
-        }
-        
-        function testMysqlConnection() {
-            const host = document.getElementById('mysqlHost').value.trim();
-            const port = document.getElementById('mysqlPort').value;
-            const database = document.getElementById('mysqlDatabase').value.trim();
-            const user = document.getElementById('mysqlUser').value.trim();
-            const password = document.getElementById('mysqlPassword').value;
-            
-            if (!host || !database || !user) {
-                alert('请填写数据库地址、数据库名和用户名');
-                return;
-            }
-            
-            const resultDiv = document.getElementById('mysqlTestResult');
-            resultDiv.style.display = 'block';
-            resultDiv.className = 'connection-status testing';
-            resultDiv.textContent = '正在测试连接...';
-            
-            fetch('/api/config/mysql/test', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    host: host,
-                    port: parseInt(port),
-                    database: database,
-                    user: user,
-                    password: password
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    resultDiv.className = 'connection-status success';
-                    resultDiv.textContent = '✓ ' + data.message;
-                } else {
-                    resultDiv.className = 'connection-status error';
-                    resultDiv.textContent = '✗ ' + data.error;
-                }
-            })
-            .catch(error => {
-                resultDiv.className = 'connection-status error';
-                resultDiv.textContent = '✗ 请求失败: ' + error.message;
-            });
-        }
-        
-        function saveMysqlConfig() {
-            const host = document.getElementById('mysqlHost').value.trim();
-            const port = document.getElementById('mysqlPort').value;
-            const database = document.getElementById('mysqlDatabase').value.trim();
-            const user = document.getElementById('mysqlUser').value.trim();
-            const password = document.getElementById('mysqlPassword').value;
-            
-            if (!host || !database || !user) {
-                alert('请填写数据库地址、数据库名和用户名');
-                return;
-            }
-            
-            fetch('/api/config/mysql', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    host: host,
-                    port: parseInt(port),
-                    database: database,
-                    user: user,
-                    password: password
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    alert('✓ 配置已保存！\n\n请重启程序使配置生效。');
-                    document.getElementById('mysqlPassword').value = '';
-                    document.getElementById('mysqlPassword').placeholder = '已设置，留空则保持不变';
-                } else {
-                    alert('保存失败: ' + (data.error || '未知错误'));
-                }
-            })
-            .catch(error => {
-                alert('保存失败: ' + error.message);
-            });
-        }
-        
-        // =============================================================================
-        // 页面切换
-        // =============================================================================
-        function showPage(pageName) {
-            // 隐藏所有页面
-            document.querySelectorAll('.page').forEach(page => {
-                page.classList.remove('active');
-            });
-            
-            // 取消所有导航按钮的激活状态
-            document.querySelectorAll('.nav-btn').forEach(btn => {
-                btn.classList.remove('active');
-            });
-            
-            // 显示目标页面
-            document.getElementById('page-' + pageName).classList.add('active');
-            
-            // 激活对应的导航按钮
-            event.target.classList.add('active');
-        }
-        
-        // =============================================================================
-        // 历史查询页面2（独立页面版本）
-        // =============================================================================
-        function queryHistory2() {
-            const date = document.getElementById('queryDate2').value;
-            
-            if (!date) {
-                alert('请选择日期');
-                return;
-            }
-            
-            document.getElementById('historyContent2').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
-            
-            fetch(`/api/history?date=${date}`)
-                .then(response => response.json())
-                .then(data => {
-                    displayHistory2(data);
-                })
-                .catch(error => {
-                    console.error('查询失败:', error);
-                    document.getElementById('historyContent2').innerHTML = '<div class="no-data">查询失败，请重试</div>';
-                });
-        }
-        
-        function displayHistory2(data) {
-            const container = document.getElementById('historyContent2');
-            const statsRow = document.getElementById('historyStats2');
-            
-            if (data.records.length === 0) {
-                container.innerHTML = '<div class="no-data">该日期没有数据</div>';
-                statsRow.style.display = 'none';
-                return;
-            }
-            
-            // 计算统计信息
-            const powers = data.records.map(r => r.power_w);
-            const maxPower = Math.max(...powers);
-            const avgPower = powers.reduce((a, b) => a + b, 0) / powers.length;
-            const energyDiff = data.records[data.records.length - 1].total_energy_kwh - 
-                              data.records[0].total_energy_kwh;
-            
-            // 更新统计显示
-            document.getElementById('statCount2').textContent = data.count;
-            document.getElementById('statMaxPower2').textContent = maxPower.toFixed(1);
-            document.getElementById('statAvgPower2').textContent = avgPower.toFixed(1);
-            document.getElementById('statEnergy2').textContent = Math.max(0, energyDiff).toFixed(4);
-            statsRow.style.display = 'flex';
-            
-            // 生成表格
-            let html = `
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>时间</th>
-                            <th>功率 (W)</th>
-                            <th>累计电能 (kWh)</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-            `;
-            
-            data.records.forEach(record => {
-                html += `
-                    <tr>
-                        <td>${record.timestamp}</td>
-                        <td>${record.power_w.toFixed(2)}</td>
-                        <td>${record.total_energy_kwh.toFixed(4)}</td>
-                    </tr>
-                `;
-            });
-            
-            html += '</tbody></table>';
-            container.innerHTML = html;
-        }
-        
-        function exportCSV2() {
-            const date = document.getElementById('queryDate2').value;
-            
-            if (!date) {
-                alert('请先选择日期');
-                return;
-            }
-            
-            const year = date.split('-')[0];
-            const month = date.split('-')[1];
-            
-            window.location.href = `/api/export?year=${year}&month=${month}`;
-        }
-        
-        // =============================================================================
-        // HA配置管理
-        // =============================================================================
-        function logout() {
-            fetch('/api/auth/logout', { method: 'POST' })
-                .finally(() => { location.href = '/login'; });
+
+            container.innerHTML =
+                '<div class="table-wrap"><table class="data-table"><thead><tr>' +
+                '<th>时间</th><th>功率 (W)</th><th>累计电量 (kWh)</th>' +
+                (showExtra ? '<th>电压 (V)</th><th>电流 (A)</th>' : '') +
+                '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+                (step > 1 ? '<div class="form-hint" style="margin-top:10px;">数据量较大，已按每 ' + step + ' 条抽样显示</div>' : '');
         }
 
+        function exportCSV() {
+            const date = document.getElementById('queryDate').value || new Date().toISOString().split('T')[0];
+            const parts = date.split('-');
+            window.location.href = '/api/export?year=' + parts[0] + '&month=' + parseInt(parts[1], 10);
+        }
+
+        // =====================================================================
+        // 页面切换
+        // =====================================================================
+        function showPage(pageName, button) {
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            document.getElementById('page-' + pageName).classList.add('active');
+            document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+            if (button) button.classList.add('active');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        // =====================================================================
+        // HA 连接配置
+        // =====================================================================
         function loadHaConfig() {
             fetch('/api/config/ha')
-                .then(response => {
-                    if (response.status === 401) {
-                        location.href = '/login';
-                        return null;
-                    }
-                    return response.json();
+                .then(r => r.json())
+                .then(config => {
+                    document.getElementById('haUrl').value = config.url || '';
+                    document.getElementById('haToken').placeholder = config.token_set ? '已保存，留空则不修改' : '在 HA 用户资料页面生成';
                 })
-                .then(data => {
-                    if (!data) return;
-                    document.getElementById('haUrl').value = data.url || '';
-                    document.getElementById('haPowerEntity').value = data.power_entity_id || '';
-                    if (data.token_set) {
-                        document.getElementById('haToken').placeholder = '已设置，留空则保持不变';
-                    }
-                })
-                .catch(error => {
-                    console.error('加载HA配置失败:', error);
-                });
+                .catch(() => {});
         }
 
-        function applyHaEntity(entityId) {
-            if (entityId) {
-                document.getElementById('haPowerEntity').value = entityId;
-            }
+        function haFormData() {
+            return {
+                url: document.getElementById('haUrl').value.trim(),
+                token: document.getElementById('haToken').value.trim()
+            };
         }
 
-        function loadHaEntities() {
-            const select = document.getElementById('haEntitySelect');
-            select.innerHTML = '<option value="">正在加载...</option>';
-            fetch('/api/config/ha/entities')
-                .then(response => response.json().then(data => ({ ok: response.ok, data })))
-                .then(({ ok, data }) => {
-                    if (!ok) {
-                        select.innerHTML = '<option value="">加载失败</option>';
-                        alert(data.error || '加载实体失败，请先保存 HA 地址和令牌');
-                        return;
-                    }
-                    const entities = data.entities || [];
-                    if (entities.length === 0) {
-                        select.innerHTML = '<option value="">未找到功率类实体</option>';
-                        return;
-                    }
-                    const current = document.getElementById('haPowerEntity').value;
-                    select.innerHTML = '<option value="">请选择功率实体</option>' + entities.map(item => {
-                        const selected = item.entity_id === current ? ' selected' : '';
-                        return `<option value="${item.entity_id}"${selected}>${item.name} (${item.entity_id}) ${item.state} ${item.unit}</option>`;
-                    }).join('');
-                })
-                .catch(error => {
-                    select.innerHTML = '<option value="">加载失败</option>';
-                    alert('加载实体失败: ' + error.message);
-                });
-        }
-        
         function testHaConnection() {
-            const url = document.getElementById('haUrl').value.trim();
-            const token = document.getElementById('haToken').value;
-            const powerEntity = document.getElementById('haPowerEntity').value.trim();
-            
-            if (!url) {
-                alert('请输入HA地址');
-                return;
-            }
-            
-            const resultDiv = document.getElementById('haTestResult');
-            resultDiv.style.display = 'block';
-            resultDiv.className = 'connection-status testing';
-            resultDiv.textContent = '正在测试连接...';
-            
-            fetch('/api/config/ha/test', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    url: url,
-                    token: token,
-                    power_entity_id: powerEntity
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    resultDiv.className = 'connection-status success';
-                    resultDiv.textContent = '✓ ' + data.message;
-                } else {
-                    resultDiv.className = 'connection-status error';
-                    resultDiv.textContent = '✗ ' + data.error;
-                }
-            })
-            .catch(error => {
-                resultDiv.className = 'connection-status error';
-                resultDiv.textContent = '✗ 请求失败: ' + error.message;
-            });
+            const data = haFormData();
+            if (!data.url) { showStatus('haTestResult', 'error', '请填写 HA 地址'); return; }
+            showStatus('haTestResult', 'testing', '正在连接...');
+            postJson('/api/config/ha/test', data)
+                .then(result => showStatus('haTestResult', result.success ? 'success' : 'error',
+                                           result.message || result.error))
+                .catch(() => showStatus('haTestResult', 'error', '请求失败'));
         }
-        
+
         function saveHaConfig() {
-            const url = document.getElementById('haUrl').value.trim();
-            const token = document.getElementById('haToken').value;
-            const powerEntity = document.getElementById('haPowerEntity').value.trim();
-            
-            if (!url) {
-                alert('请输入HA地址');
-                return;
-            }
-            if (!powerEntity) {
-                alert('请填写功率实体 ID');
-                return;
-            }
-            
-            fetch('/api/config/ha', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    url: url,
-                    token: token,
-                    power_entity_id: powerEntity
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    alert('✓ HA 配置已保存。功率采集会使用新的实体，无需重启。');
+            const data = haFormData();
+            if (!data.url) { showStatus('haTestResult', 'error', '请填写 HA 地址'); return; }
+            showStatus('haTestResult', 'testing', '保存中...');
+            postJson('/api/config/ha', data)
+                .then(result => {
+                    if (result.error) { showStatus('haTestResult', 'error', result.error); return; }
                     document.getElementById('haToken').value = '';
-                    document.getElementById('haToken').placeholder = '已设置，留空则保持不变';
-                } else {
-                    alert('保存失败: ' + (data.error || '未知错误'));
-                }
-            })
-            .catch(error => {
-                alert('保存失败: ' + error.message);
-            });
+                    loadHaConfig();
+                    showStatus('haTestResult', 'success', result.message);
+                    scanDevices(true);
+                })
+                .catch(() => showStatus('haTestResult', 'error', '保存失败'));
         }
-        
-        // =============================================================================
-        // MQTT配置管理
-        // =============================================================================
+
+        // =====================================================================
+        // 设备扫描 / 导入
+        // =====================================================================
+        function scanDevices(force) {
+            const button = document.getElementById('scanBtn');
+            const box = document.getElementById('scanResult');
+            button.disabled = true;
+            button.textContent = '扫描中...';
+            box.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+            fetch('/api/ha/discover' + (force ? '?force=1' : ''))
+                .then(r => r.json())
+                .then(data => {
+                    button.disabled = false;
+                    button.textContent = '🔍 扫描设备';
+                    if (data.error) {
+                        box.innerHTML = '<div class="no-data">' + escapeHtml(data.error) + '</div>';
+                        return;
+                    }
+                    scanDevices_cache = data.devices || [];
+                    renderScanResult(scanDevices_cache);
+                })
+                .catch(() => {
+                    button.disabled = false;
+                    button.textContent = '🔍 扫描设备';
+                    box.innerHTML = '<div class="no-data">扫描失败，请检查 HA 连接</div>';
+                });
+        }
+
+        function renderScanResult(devices) {
+            const box = document.getElementById('scanResult');
+            if (!devices.length) {
+                box.innerHTML = '<div class="no-data">没有扫描到带功率或电量计量的设备</div>';
+                return;
+            }
+
+            box.innerHTML =
+                '<div class="form-hint" style="margin-bottom:12px;">共发现 ' + devices.length +
+                ' 个可用设备，勾选后点右上角「导入选中」</div>' +
+                devices.map(device => {
+                    const chips = (device.roles || []).map(role => {
+                        const reading = (device.readings || {})[role] || {};
+                        let text = ROLE_LABELS[role] || role;
+                        if (reading.state !== undefined && reading.state !== null && reading.state !== '') {
+                            text += ' ' + reading.state + (reading.unit ? ' ' + reading.unit : '');
+                        }
+                        return '<span class="chip">' + escapeHtml(text) + '</span>';
+                    }).join('');
+
+                    const entityLines = (device.roles || []).map(role => {
+                        const entityId = (device.entities || {})[role];
+                        return '<div class="entity-row"><span class="entity-role">' +
+                               (ROLE_LABELS[role] || role) + '</span>' +
+                               '<span class="entity-id">' + escapeHtml(entityId) + '</span></div>';
+                    }).join('');
+
+                    return '' +
+                        '<div class="scan-item ' + (device.added ? 'added' : '') + '">' +
+                            '<input type="checkbox" class="scan-check" value="' + escapeHtml(device.key) + '"' +
+                                (device.added ? '' : ' checked') + '>' +
+                            '<div style="flex:1;min-width:0;">' +
+                                '<div class="scan-title">' + escapeHtml(device.name) +
+                                    (device.added ? ' <span class="chip green">已添加</span>' : '') + '</div>' +
+                                '<div class="scan-sub">' +
+                                    escapeHtml([device.manufacturer, device.model].filter(Boolean).join(' · ')) +
+                                    (device.source === 'prefix' ? '（按实体名归组）' : '') +
+                                '</div>' +
+                                '<div>' + chips + '</div>' +
+                                '<details style="margin-top:8px;"><summary style="cursor:pointer;color:#888;font-size:0.82em;">查看绑定实体</summary>' +
+                                    '<div style="margin-top:8px;">' + entityLines + '</div>' +
+                                '</details>' +
+                            '</div>' +
+                        '</div>';
+                }).join('');
+        }
+
+        function importSelected() {
+            const keys = Array.from(document.querySelectorAll('.scan-check:checked')).map(c => c.value);
+            if (!keys.length) { alert('请先勾选要导入的插座'); return; }
+
+            postJson('/api/devices/import', { keys: keys })
+                .then(result => {
+                    if (result.error) { alert('导入失败: ' + result.error); return; }
+                    loadDevices();
+                    loadRealtimeData();
+                    scanDevices(false);
+                    showStatus('deviceSaveResult', 'success', result.message);
+                })
+                .catch(() => alert('导入失败，请重试'));
+        }
+
+        // =====================================================================
+        // 已添加插座管理
+        // =====================================================================
+        function loadDevices() {
+            fetch('/api/devices')
+                .then(r => r.json())
+                .then(data => {
+                    deviceConfigs = data.devices || [];
+                    renderDeviceConfigs(deviceConfigs);
+                })
+                .catch(() => {});
+        }
+
+        function renderDeviceConfigs(devices) {
+            const box = document.getElementById('deviceConfigList');
+            if (!devices.length) {
+                box.innerHTML = '<div class="no-data">还没有添加插座</div>';
+                return;
+            }
+
+            box.innerHTML = devices.map((device, index) => {
+                const entities = device.entities || {};
+                const entityLines = Object.keys(ROLE_LABELS)
+                    .filter(role => entities[role])
+                    .map(role => '<div class="entity-row"><span class="entity-role">' + ROLE_LABELS[role] +
+                                 '</span><span class="entity-id">' + escapeHtml(entities[role]) + '</span></div>')
+                    .join('');
+
+                return '' +
+                    '<div class="scan-item">' +
+                        '<div style="flex:1;min-width:0;">' +
+                            '<div class="controls-row" style="margin-bottom:10px;">' +
+                                '<div class="form-group" style="flex:1;min-width:200px;">' +
+                                    '<label class="form-label">名称</label>' +
+                                    '<input class="form-input device-name-input" data-index="' + index + '" value="' +
+                                        escapeHtml(device.name) + '">' +
+                                '</div>' +
+                                '<div class="form-group">' +
+                                    '<label class="form-label">状态</label>' +
+                                    '<select class="form-input device-enabled-input" data-index="' + index + '">' +
+                                        '<option value="1"' + (device.enabled ? ' selected' : '') + '>启用</option>' +
+                                        '<option value="0"' + (device.enabled ? '' : ' selected') + '>停用</option>' +
+                                    '</select>' +
+                                '</div>' +
+                                '<div class="form-group">' +
+                                    '<label class="form-label">电量统计</label>' +
+                                    '<select class="form-input device-mode-input" data-index="' + index + '">' +
+                                        '<option value="auto"' + (device.energy_mode === 'auto' ? ' selected' : '') + '>自动</option>' +
+                                        '<option value="entity"' + (device.energy_mode === 'entity' ? ' selected' : '') + '>用电量实体</option>' +
+                                        '<option value="integrate"' + (device.energy_mode === 'integrate' ? ' selected' : '') + '>功率积分</option>' +
+                                    '</select>' +
+                                '</div>' +
+                                '<button class="btn btn-danger btn-sm" onclick="deleteDevice(\'' + escapeHtml(device.key) + '\')">移除</button>' +
+                            '</div>' +
+                            '<details><summary style="cursor:pointer;color:#888;font-size:0.82em;">绑定的实体（' +
+                                Object.keys(entities).length + ' 个）</summary>' +
+                                '<div style="margin-top:8px;">' + entityLines + '</div>' +
+                            '</details>' +
+                        '</div>' +
+                    '</div>';
+            }).join('') +
+            '<div class="form-actions"><button class="btn btn-success" onclick="saveDeviceConfigs()">💾 保存修改</button></div>';
+        }
+
+        function saveDeviceConfigs() {
+            const payload = deviceConfigs.map((device, index) => {
+                const nameInput = document.querySelector('.device-name-input[data-index="' + index + '"]');
+                const enabledInput = document.querySelector('.device-enabled-input[data-index="' + index + '"]');
+                const modeInput = document.querySelector('.device-mode-input[data-index="' + index + '"]');
+                return {
+                    key: device.key,
+                    name: nameInput ? nameInput.value.trim() : device.name,
+                    enabled: enabledInput ? enabledInput.value === '1' : device.enabled,
+                    energy_mode: modeInput ? modeInput.value : device.energy_mode,
+                    model: device.model,
+                    manufacturer: device.manufacturer,
+                    entities: device.entities
+                };
+            });
+
+            postJson('/api/devices', { devices: payload })
+                .then(result => {
+                    if (result.error) { showStatus('deviceSaveResult', 'error', result.error); return; }
+                    showStatus('deviceSaveResult', 'success', result.message);
+                    loadDevices();
+                    loadRealtimeData();
+                })
+                .catch(() => showStatus('deviceSaveResult', 'error', '保存失败'));
+        }
+
+        function deleteDevice(key) {
+            if (!confirm('确定移除该插座？历史数据会保留，但不再采集。')) return;
+            fetch('/api/devices/' + encodeURIComponent(key), { method: 'DELETE' })
+                .then(r => r.json())
+                .then(result => {
+                    showStatus('deviceSaveResult', 'success', result.message || '已移除');
+                    loadDevices();
+                    loadRealtimeData();
+                })
+                .catch(() => showStatus('deviceSaveResult', 'error', '移除失败'));
+        }
+
+        // =====================================================================
+        // MQTT 配置
+        // =====================================================================
         function loadMqttConfig() {
             fetch('/api/config/mqtt')
-                .then(response => response.json())
-                .then(data => {
-                    document.getElementById('mqttBroker').value = data.broker || '';
-                    document.getElementById('mqttPort').value = data.port || 1883;
-                    document.getElementById('mqttUsername').value = data.username || '';
-                    document.getElementById('mqttClientId').value = data.client_id || 'home_electricity_monitor';
-                    
-                    // 密码字段只显示是否已设置
-                    if (data.password_set) {
-                        document.getElementById('mqttPassword').placeholder = '已设置，留空则保持不变';
-                    }
+                .then(r => r.json())
+                .then(config => {
+                    document.getElementById('mqttBroker').value = config.broker || '';
+                    document.getElementById('mqttPort').value = config.port || 1883;
+                    document.getElementById('mqttUsername').value = config.username || '';
+                    document.getElementById('mqttClientId').value = config.client_id || 'home_electricity_monitor';
+                    if (config.password_set) document.getElementById('mqttPassword').placeholder = '已保存，留空则不修改';
                 })
-                .catch(error => {
-                    console.error('加载MQTT配置失败:', error);
-                });
+                .catch(() => {});
         }
-        
+
+        function mqttFormData() {
+            return {
+                broker: document.getElementById('mqttBroker').value.trim(),
+                port: parseInt(document.getElementById('mqttPort').value, 10) || 1883,
+                username: document.getElementById('mqttUsername').value.trim(),
+                password: document.getElementById('mqttPassword').value,
+                client_id: document.getElementById('mqttClientId').value.trim()
+            };
+        }
+
         function testMqttConnection() {
-            const broker = document.getElementById('mqttBroker').value.trim();
-            const port = document.getElementById('mqttPort').value;
-            const username = document.getElementById('mqttUsername').value.trim();
-            const password = document.getElementById('mqttPassword').value;
-            
-            if (!broker) {
-                alert('请输入服务器地址');
-                return;
-            }
-            
-            const resultDiv = document.getElementById('mqttTestResult');
-            resultDiv.style.display = 'block';
-            resultDiv.className = 'connection-status testing';
-            resultDiv.textContent = '正在测试连接...';
-            
-            fetch('/api/config/mqtt/test', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    broker: broker,
-                    port: parseInt(port),
-                    username: username,
-                    password: password
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    resultDiv.className = 'connection-status success';
-                    resultDiv.textContent = '✓ ' + data.message;
-                } else {
-                    resultDiv.className = 'connection-status error';
-                    resultDiv.textContent = '✗ ' + data.error;
-                }
-            })
-            .catch(error => {
-                resultDiv.className = 'connection-status error';
-                resultDiv.textContent = '✗ 请求失败: ' + error.message;
-            });
+            const data = mqttFormData();
+            if (!data.broker) { showStatus('mqttTestResult', 'error', '请填写服务器地址'); return; }
+            showStatus('mqttTestResult', 'testing', '正在连接...');
+            postJson('/api/config/mqtt/test', data)
+                .then(result => showStatus('mqttTestResult', result.success ? 'success' : 'error',
+                                           result.message || result.error))
+                .catch(() => showStatus('mqttTestResult', 'error', '请求失败'));
         }
-        
+
         function saveMqttConfig() {
-            const broker = document.getElementById('mqttBroker').value.trim();
-            const port = document.getElementById('mqttPort').value;
-            const username = document.getElementById('mqttUsername').value.trim();
-            const password = document.getElementById('mqttPassword').value;
-            const clientId = document.getElementById('mqttClientId').value.trim();
-            
-            if (!broker) {
-                alert('请输入服务器地址');
+            showStatus('mqttTestResult', 'testing', '保存中...');
+            postJson('/api/config/mqtt', mqttFormData())
+                .then(result => {
+                    showStatus('mqttTestResult', result.error ? 'error' : 'success', result.error || result.message);
+                    if (!result.error) { document.getElementById('mqttPassword').value = ''; loadMqttConfig(); }
+                })
+                .catch(() => showStatus('mqttTestResult', 'error', '保存失败'));
+        }
+
+        // =====================================================================
+        // MySQL 配置
+        // =====================================================================
+        function loadMysqlConfig() {
+            fetch('/api/config/mysql')
+                .then(r => r.json())
+                .then(config => {
+                    document.getElementById('mysqlHost').value = config.host || '';
+                    document.getElementById('mysqlPort').value = config.port || 3306;
+                    document.getElementById('mysqlDatabase').value = config.database || 'electricity_monitor';
+                    document.getElementById('mysqlUser').value = config.user || '';
+                    if (config.password_set) document.getElementById('mysqlPassword').placeholder = '已保存，留空则不修改';
+                })
+                .catch(() => {});
+        }
+
+        function mysqlFormData() {
+            return {
+                host: document.getElementById('mysqlHost').value.trim(),
+                port: parseInt(document.getElementById('mysqlPort').value, 10) || 3306,
+                database: document.getElementById('mysqlDatabase').value.trim(),
+                user: document.getElementById('mysqlUser').value.trim(),
+                password: document.getElementById('mysqlPassword').value
+            };
+        }
+
+        function testMysqlConnection() {
+            const data = mysqlFormData();
+            if (!data.host || !data.database || !data.user) {
+                showStatus('mysqlTestResult', 'error', '请填写完整信息');
                 return;
             }
-            
-            fetch('/api/config/mqtt', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    broker: broker,
-                    port: parseInt(port),
-                    username: username,
-                    password: password,
-                    client_id: clientId
+            showStatus('mysqlTestResult', 'testing', '正在连接...');
+            postJson('/api/config/mysql/test', data)
+                .then(result => showStatus('mysqlTestResult', result.success ? 'success' : 'error',
+                                           result.message || result.error))
+                .catch(() => showStatus('mysqlTestResult', 'error', '请求失败'));
+        }
+
+        function saveMysqlConfig() {
+            showStatus('mysqlTestResult', 'testing', '保存中...');
+            postJson('/api/config/mysql', mysqlFormData())
+                .then(result => {
+                    showStatus('mysqlTestResult', result.error ? 'error' : 'success', result.error || result.message);
+                    if (!result.error) { document.getElementById('mysqlPassword').value = ''; loadMysqlConfig(); }
                 })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    alert('✓ 配置已保存！\n\n请重启程序使配置生效。');
-                    // 清空密码输入框
-                    document.getElementById('mqttPassword').value = '';
-                    document.getElementById('mqttPassword').placeholder = '已设置，留空则保持不变';
-                } else {
-                    alert('保存失败: ' + (data.error || '未知错误'));
-                }
-            })
-            .catch(error => {
-                alert('保存失败: ' + error.message);
-            });
+                .catch(() => showStatus('mysqlTestResult', 'error', '保存失败'));
         }
     </script>
 </body>
