@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  electricity-monitor:
+    build: .
+    image: electricity-monitor:latest
+    container_name: electricity-monitor
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      # 持久化数据目录
+      - ./data/electricity_data:/app/electricity_data
+      # 配置文件目录（可选，方便直接编辑配置）
+      - ./data/config:/app/config
+    environment:
+      - TZ=Asia/Shanghai
+    networks:
+      - monitor-network
+
+networks:
+  monitor-network:
+    driver: bridge
