@@ -17,22 +17,22 @@
 
 ### 方式一：Docker Compose 部署（推荐）
 
-国内环境请从 Gitee 克隆后本地构建，避免访问 GitHub / GHCR：
+国内环境请从 Gitee 克隆后直接启动。默认会通过毫秒镜像拉取已构建好的镜像，不要加 `--build`：
 
 ```bash
 git clone https://gitee.com/tyrantcwj/HAPowerStats.git
 cd HAPowerStats
-docker compose up -d --build
+docker compose up -d
 ```
 
 GitHub 仓库：https://github.com/tyrantcwj/HAPowerStats
 
-也可以直接使用已发布镜像。国内拉取 GHCR 可用 DaoCloud 加速：
+如果只想改 `image` 地址，国内优先用：
 
 ```yaml
 services:
   electricity-monitor:
-    image: docker.m.daocloud.io/ghcr.io/tyrantcwj/hapowerstats:latest
+    image: ghcr.1ms.run/tyrantcwj/hapowerstats:latest
     container_name: electricity-monitor
     restart: unless-stopped
     ports:
@@ -44,7 +44,14 @@ services:
       - TZ=Asia/Shanghai
 ```
 
-若加速站不可用，把 `image` 改回 `ghcr.io/tyrantcwj/hapowerstats:latest`。
+备用加速：`ghcr.m.daocloud.io/tyrantcwj/hapowerstats:latest`  
+直连：`ghcr.io/tyrantcwj/hapowerstats:latest`
+
+只有需要改代码后本地构建时才用：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
 
 启动：
 ```bash
@@ -148,11 +155,11 @@ python home_electricity_monitor.py
 ### Docker构建
 
 ```bash
-# 构建镜像
-docker build -t electricity-monitor .
+# 国内本地构建（基础镜像走毫秒加速）
+docker compose -f docker-compose.yml -f docker-compose.build.yml build
 
-# 运行容器
-docker run -d -p 5000:5000 --name electricity-monitor electricity-monitor
+# 或直接指定加速后的基础镜像
+docker build --build-arg BASE_IMAGE=docker.1ms.run/library/python:3.11-alpine -t electricity-monitor .
 ```
 
 ## License

@@ -1,21 +1,16 @@
 services:
   electricity-monitor:
-    build:
-      context: .
-      args:
-        # 国内构建加速。若镜像站失效，可改成 docker.1ms.run/library/python:3.11-slim
-        BASE_IMAGE: docker.m.daocloud.io/library/python:3.11-slim
-        PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
-        APT_MIRROR: mirrors.aliyun.com
-    image: electricity-monitor:latest
+    # 默认拉取已构建镜像，避免每次在国内重新下载 Python 基础镜像和 pip 依赖
+    # 加速站失效时，可依次换成：
+    #   ghcr.m.daocloud.io/tyrantcwj/hapowerstats:latest
+    #   ghcr.io/tyrantcwj/hapowerstats:latest
+    image: ghcr.1ms.run/tyrantcwj/hapowerstats:latest
     container_name: electricity-monitor
     restart: unless-stopped
     ports:
       - "5000:5000"
     volumes:
-      # 持久化数据目录
       - ./data/electricity_data:/app/electricity_data
-      # 配置文件目录（可选，方便直接编辑配置）
       - ./data/config:/app/config
     environment:
       - TZ=Asia/Shanghai

@@ -1,0 +1,11 @@
+# 仅在需要本地构建时使用：
+# docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+services:
+  electricity-monitor:
+    image: electricity-monitor:latest
+    build:
+      context: .
+      args:
+        BASE_IMAGE: docker.1ms.run/library/python:3.11-alpine
+        PIP_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
+        ALPINE_MIRROR: mirrors.aliyun.com
