@@ -22,7 +22,6 @@ jobs:
             echo "未配置 GITEE_TOKEN，跳过同步"
             exit 1
           fi
-          AUTH=$(printf 'tyrantcwj:%s' "$GITEE_TOKEN" | base64 | tr -d '\n')
-          git config --local "http.https://gitee.com/.extraheader" "AUTHORIZATION: basic ${AUTH}"
-          git push --force --tags https://gitee.com/tyrantcwj/HAPowerStats.git "HEAD:refs/heads/main"
-          git config --local --unset-all "http.https://gitee.com/.extraheader" || true
+          git remote remove gitee 2>/dev/null || true
+          git remote add gitee "https://tyrantcwj:${GITEE_TOKEN}@gitee.com/tyrantcwj/HAPowerStats.git"
+          git push --force --tags gitee "HEAD:refs/heads/main"
