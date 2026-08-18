@@ -17,6 +17,18 @@
 
 ### 方式一：Docker Compose 部署（推荐）
 
+国内环境请从 Gitee 克隆后本地构建，避免访问 GitHub / GHCR：
+
+```bash
+git clone https://gitee.com/tyrantcwj/HAPowerStats.git
+cd HAPowerStats
+docker compose up -d --build
+```
+
+GitHub 仓库：https://github.com/tyrantcwj/HAPowerStats
+
+也可以直接使用已发布镜像（需能访问 ghcr）：
+
 ```yaml
 services:
   electricity-monitor:
@@ -120,7 +132,7 @@ def get_power_reading() -> float:
 
 ```bash
 # 克隆仓库
-git clone https://github.com/tyrantcwj/HAPowerStats.git
+git clone https://gitee.com/tyrantcwj/HAPowerStats.git
 cd HAPowerStats
 
 # 安装依赖

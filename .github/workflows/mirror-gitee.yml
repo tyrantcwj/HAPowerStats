@@ -1,0 +1,28 @@
+name: Mirror to Gitee
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push to Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          if [ -z "$GITEE_TOKEN" ]; then
+            echo "未配置 GITEE_TOKEN，跳过同步"
+            exit 1
+          fi
+          AUTH=$(printf 'tyrantcwj:%s' "$GITEE_TOKEN" | base64 | tr -d '\n')
+          git config --local "http.https://gitee.com/.extraheader" "AUTHORIZATION: basic ${AUTH}"
+          git push --force --tags https://gitee.com/tyrantcwj/HAPowerStats.git "HEAD:refs/heads/main"
+          git config --local --unset-all "http.https://gitee.com/.extraheader" || true
