@@ -412,7 +412,6 @@
                         <input type="date" id="queryDate" class="form-input">
                     </div>
                     <button class="btn btn-primary" onclick="queryHistory()">🔍 查询</button>
-                    <button class="btn btn-success" onclick="exportCSV()">📥 导出本月 CSV</button>
                 </div>
 
                 <div id="historyStats" class="stats-row" style="display:none;">
@@ -423,6 +422,48 @@
                 </div>
 
                 <div id="historyContent"><div class="no-data">请选择日期并点击查询</div></div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header">
+                    <div>
+                        <div class="panel-title">📥 导出报表</div>
+                        <div class="panel-subtitle">中文表头、带 BOM，Excel 打开不乱码；电量按功率积分计算，比累计计数器差值平滑</div>
+                    </div>
+                </div>
+                <div class="controls-row">
+                    <div class="form-group">
+                        <label class="form-label">报表类型</label>
+                        <select id="exportType" class="form-input" onchange="onExportTypeChange()">
+                            <option value="hourly">分时统计（某天，每小时一段）</option>
+                            <option value="daily">每日统计（某月，每天一行）</option>
+                            <option value="detail">用电明细（原始采样）</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="exportDayBox">
+                        <label class="form-label">日期</label>
+                        <input type="date" id="exportDate" class="form-input">
+                    </div>
+                    <div class="form-group" id="exportMonthBox" style="display:none;">
+                        <label class="form-label">月份</label>
+                        <input type="month" id="exportMonth" class="form-input">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">插座</label>
+                        <select id="exportDevice" class="form-input"><option value="">全部</option></select>
+                    </div>
+                    <div class="form-group" id="exportIntervalBox" style="display:none;">
+                        <label class="form-label">抽样间隔</label>
+                        <select id="exportInterval" class="form-input">
+                            <option value="0">全部采样点</option>
+                            <option value="60" selected>每分钟一条</option>
+                            <option value="300">每 5 分钟一条</option>
+                            <option value="900">每 15 分钟一条</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-success" onclick="exportReport()">📥 导出 CSV</button>
+                </div>
+                <div id="exportResult" class="connection-status" style="display:none;"></div>
             </div>
         </div>
 
@@ -558,7 +599,10 @@
         const socket = io();
 
         document.addEventListener('DOMContentLoaded', function () {
-            document.getElementById('queryDate').value = new Date().toISOString().split('T')[0];
+            const todayStr = new Date().toISOString().split('T')[0];
+            document.getElementById('queryDate').value = todayStr;
+            document.getElementById('exportDate').value = todayStr;
+            document.getElementById('exportMonth').value = todayStr.slice(0, 7);
             const savedPrice = localStorage.getItem('electricityPrice');
             if (savedPrice) document.getElementById('electricityPrice').value = savedPrice;
 
@@ -649,12 +693,14 @@
                 const metrics = [];
                 metrics.push(metricHtml('今日', fmt(device.today_energy_kwh, 3) + ' kWh'));
                 metrics.push(metricHtml('本月', fmt(device.month_energy_kwh, 3) + ' kWh'));
-                metrics.push(metricHtml('累计', fmt(device.total_energy_kwh, 2) + ' kWh'));
+                metrics.push(metricHtml(device.total_basis === 'entity' ? '累计 (插座)' : '累计',
+                                        fmt(device.total_energy_kwh, 2) + ' kWh'));
                 if (device.voltage_v !== null && device.voltage_v !== undefined) {
                     metrics.push(metricHtml('电压', fmt(device.voltage_v, 1) + ' V'));
                 }
                 if (device.current_a !== null && device.current_a !== undefined) {
-                    metrics.push(metricHtml('电流', fmt(device.current_a, 3) + ' A'));
+                    metrics.push(metricHtml(device.current_derived ? '电流 (推算)' : '电流',
+                                            fmt(device.current_a, 2) + ' A'));
                 }
                 if (device.power_factor !== null && device.power_factor !== undefined) {
                     metrics.push(metricHtml('功率因数', fmt(device.power_factor, 2)));
@@ -812,9 +858,15 @@
             const wanted = ['|全部（合计）'].concat(devices.map(d => d.key + '|' + d.name)).join(',');
             if (select.dataset.signature === wanted) return;
             select.dataset.signature = wanted;
-            select.innerHTML = '<option value="">全部（合计）</option>' +
-                devices.map(d => '<option value="' + escapeHtml(d.key) + '">' + escapeHtml(d.name) + '</option>').join('');
+            const options = devices.map(d => '<option value="' + escapeHtml(d.key) + '">' +
+                                              escapeHtml(d.name) + '</option>').join('');
+            select.innerHTML = '<option value="">全部（合计）</option>' + options;
             select.value = current;
+
+            const exportSelect = document.getElementById('exportDevice');
+            const exportCurrent = exportSelect.value;
+            exportSelect.innerHTML = '<option value="">全部</option>' + options;
+            exportSelect.value = exportCurrent;
         }
 
         function queryHistory() {
@@ -879,10 +931,54 @@
                 (step > 1 ? '<div class="form-hint" style="margin-top:10px;">数据量较大，已按每 ' + step + ' 条抽样显示</div>' : '');
         }
 
-        function exportCSV() {
-            const date = document.getElementById('queryDate').value || new Date().toISOString().split('T')[0];
-            const parts = date.split('-');
-            window.location.href = '/api/export?year=' + parts[0] + '&month=' + parseInt(parts[1], 10);
+        function onExportTypeChange() {
+            const type = document.getElementById('exportType').value;
+            document.getElementById('exportDayBox').style.display = type === 'daily' ? 'none' : 'flex';
+            document.getElementById('exportMonthBox').style.display = type === 'daily' ? 'flex' : 'none';
+            document.getElementById('exportIntervalBox').style.display = type === 'detail' ? 'flex' : 'none';
+        }
+
+        function exportReport() {
+            const type = document.getElementById('exportType').value;
+            const device = document.getElementById('exportDevice').value;
+            const price = document.getElementById('electricityPrice').value || 0;
+            const params = new URLSearchParams({ type: type, device: device, price: price });
+
+            if (type === 'daily') {
+                const month = document.getElementById('exportMonth').value;
+                if (!month) { showStatus('exportResult', 'error', '请选择月份'); return; }
+                params.set('month', month);
+            } else {
+                const date = document.getElementById('exportDate').value;
+                if (!date) { showStatus('exportResult', 'error', '请选择日期'); return; }
+                params.set('date', date);
+                if (type === 'detail') params.set('interval', document.getElementById('exportInterval').value);
+            }
+
+            showStatus('exportResult', 'testing', '正在生成报表...');
+            fetch('/api/export?' + params.toString())
+                .then(async response => {
+                    if (!response.ok) {
+                        const err = await response.json().catch(() => ({}));
+                        throw new Error(err.error || '导出失败');
+                    }
+                    const disposition = response.headers.get('Content-Disposition') || '';
+                    const match = disposition.match(/filename\*=UTF-8''([^;]+)/);
+                    const name = match ? decodeURIComponent(match[1]) : 'export.csv';
+                    return response.blob().then(blob => ({ blob: blob, name: name }));
+                })
+                .then(result => {
+                    const url = URL.createObjectURL(result.blob);
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = result.name;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(url);
+                    showStatus('exportResult', 'success', '已导出：' + result.name);
+                })
+                .catch(error => showStatus('exportResult', 'error', error.message));
         }
 
         // =====================================================================

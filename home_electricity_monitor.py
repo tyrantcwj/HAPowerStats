@@ -96,11 +96,15 @@ def _empty_device_state(name: str = "") -> dict:
         "month_energy_kwh": 0.0,
         "voltage_v": None,
         "current_a": None,
+        "current_derived": False,     # 电流是 功率/电压 推算的（米家也是这么算的）
         "power_factor": None,
         "frequency_hz": None,
         "switch_state": None,
         "energy_source": "integrate",   # entity=读 HA 电量实体，integrate=功率积分
         "period_source": "computed",    # device=插座自报今日/本月，computed=本程序统计
+        "total_basis": "accumulated",   # entity=插座自身累计计数器，accumulated=本程序累加
+        "device_total_kwh": None,       # 插座自身的累计计数器读数
+        "energy_offset_kwh": 0.0,       # 实体归零前的累计量，保证总数不倒退
         "last_energy_reading": None,    # HA 电量实体上一次读数
         "available": False,
         "last_update": None,
@@ -291,23 +295,38 @@ class DeviceAccumulator:
             state["month_start_energy_kwh"] = float(state.get("total_energy_kwh") or 0)
             state["last_reset_month"] = month
 
-    def _accumulate_from_entity(self, state: dict, reading: float) -> bool:
-        """用 HA 的累计电量实体推进总电量。"""
+    def _accumulate_from_entity(self, state: dict, reading: float):
+        """直接采用插座自身的累计电量计数器。
+
+        插座的耗电量实体本身就是「出厂至今」的累计值（而且往往是整数级跳变），
+        以前只累加接入后的增量，导致页面上的「累计」长期是 0，这里改成直接用它。
+        """
         previous = state.get("last_energy_reading")
+        offset = float(state.get("energy_offset_kwh") or 0)
+
+        if previous is not None and reading + 1e-9 < float(previous):
+            # 实体归零（清零 / 换设备 / 重新上电），把归零前的读数并进偏移量
+            offset += float(previous)
+            state["energy_offset_kwh"] = offset
+            logger.info(
+                "[%s] 电量实体归零：%.4f -> %.4f kWh，累计值按偏移量继续往上加",
+                self.name, previous, reading,
+            )
+
         state["last_energy_reading"] = reading
-        if previous is None:
-            # 首次读到，只记基线，不补历史
-            return True
-        delta = reading - float(previous)
-        if delta < 0:
-            # 实体归零（换设备 / 清零 / 重新上电），把归零后的值当作新增量
-            logger.info("[%s] 电量实体归零：%.4f -> %.4f kWh", self.name, previous, reading)
-            delta = reading
-        if delta > CONFIG["max_energy_step_kwh"]:
-            logger.warning("[%s] 电量单次跳变 %.4f kWh 过大，本次不累加", self.name, delta)
-            return True
-        state["total_energy_kwh"] = float(state.get("total_energy_kwh") or 0) + delta
-        return True
+        state["device_total_kwh"] = reading
+        new_total = reading + offset
+
+        if state.get("total_basis") != "entity":
+            # 从「本程序累加」切换到「用插座累计值」，把日/月基线一起挪过去，
+            # 否则今日/本月会瞬间变成一个巨大的数
+            old_today = float(state.get("today_energy_kwh") or 0)
+            old_month = float(state.get("month_energy_kwh") or 0)
+            state["day_start_energy_kwh"] = new_total - old_today
+            state["month_start_energy_kwh"] = new_total - old_month
+            state["total_basis"] = "entity"
+
+        state["total_energy_kwh"] = new_total
 
     def _accumulate_from_power(self, state: dict, power_w: float, now: float):
         """没有电量实体时，用功率对时间积分。"""
@@ -322,6 +341,7 @@ class DeviceAccumulator:
             else:
                 increment = self.last_power_w * elapsed / 3600.0 / 1000.0
                 state["total_energy_kwh"] = float(state.get("total_energy_kwh") or 0) + increment
+        state["total_basis"] = "accumulated"
 
     def collect(self, index: dict) -> Optional[dict]:
         """采集一次，返回要落库的行；设备不可读时返回 None。"""
@@ -367,7 +387,17 @@ class DeviceAccumulator:
         else:
             state["period_source"] = "computed"
         state["voltage_v"] = self._reading(index, "voltage")
-        state["current_a"] = self._reading(index, "current")
+        measured_current = self._reading(index, "current")
+        if measured_current is not None:
+            state["current_a"] = measured_current
+            state["current_derived"] = False
+        elif power_w is not None and state["voltage_v"] and state["voltage_v"] > 50:
+            # 小米插座不上报电流，米家界面里的电流也是 功率/电压 算出来的
+            state["current_a"] = round(power_w / state["voltage_v"], 3)
+            state["current_derived"] = True
+        else:
+            state["current_a"] = None
+            state["current_derived"] = False
         state["power_factor"] = self._reading(index, "power_factor")
         state["frequency_hz"] = self._reading(index, "frequency")
         state["entity_energy_kwh"] = energy_kwh

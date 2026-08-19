@@ -11,8 +11,9 @@ import socket
 import threading
 import time
 from datetime import datetime
+from urllib.parse import quote
 
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import Flask, Response, jsonify, render_template, request
 from flask_socketio import SocketIO, emit
 
 import ha_client
@@ -30,8 +31,9 @@ from config_store import (
     save_mysql_config,
     upsert_devices,
 )
+import reports
 from ha_client import HAClient, HAError
-from storage import CSVStore, csv_path, legacy_csv_path, read_day_records
+from storage import CSVStore, read_day_records, read_month_records
 
 WEB_CONFIG = {
     "host": os.environ.get("WEB_HOST", "0.0.0.0"),
@@ -100,6 +102,9 @@ def _realtime_payload() -> dict:
             "month_energy_kwh": float(runtime.get("month_energy_kwh") or 0.0),
             "voltage_v": runtime.get("voltage_v"),
             "current_a": runtime.get("current_a"),
+            "current_derived": bool(runtime.get("current_derived")),
+            "device_total_kwh": runtime.get("device_total_kwh"),
+            "total_basis": runtime.get("total_basis", "accumulated"),
             "power_factor": runtime.get("power_factor"),
             "frequency_hz": runtime.get("frequency_hz"),
             "switch_state": runtime.get("switch_state"),
@@ -198,19 +203,70 @@ def get_available_dates():
 
 @app.route("/api/export")
 def export_csv():
-    year = request.args.get("year", datetime.now().year, type=int)
-    month = request.args.get("month", datetime.now().month, type=int)
-    reference = datetime(year, month, 1)
-    path = csv_path(reference, DATA_DIR)
-    if not path.exists():
-        path = legacy_csv_path(reference, DATA_DIR)
-    if not path.exists():
-        return jsonify({"error": "该月份还没有数据"}), 404
-    return send_file(
-        path,
-        mimetype="text/csv",
-        as_attachment=True,
-        download_name="electricity_%04d-%02d.csv" % (year, month),
+    """导出报表：明细 / 分时 / 每日，中文表头，Excel 直接能开。"""
+    report_type = (request.args.get("type") or "detail").strip()
+    if report_type not in reports.REPORT_TYPES:
+        return jsonify({"error": "未知的报表类型"}), 400
+
+    device_key = (request.args.get("device") or "").strip()
+    if device_key in ("all", "__all__"):
+        device_key = ""
+
+    try:
+        interval = max(0, int(request.args.get("interval") or 0))
+    except (TypeError, ValueError):
+        interval = 0
+    try:
+        price = max(0.0, float(request.args.get("price") or 0))
+    except (TypeError, ValueError):
+        price = 0.0
+
+    date_str = (request.args.get("date") or "").strip()
+    month_str = (request.args.get("month") or "").strip()
+
+    if report_type == "daily" or (month_str and not date_str):
+        source = month_str or date_str or datetime.now().strftime("%Y-%m")
+        try:
+            year, month = int(source[:4]), int(source[5:7])
+            datetime(year, month, 1)
+        except (TypeError, ValueError):
+            return jsonify({"error": "月份格式错误，请使用 YYYY-MM"}), 400
+        records = read_month_records(year, month, device_key or None)
+        scope = "%04d-%02d" % (year, month)
+    else:
+        source = date_str or datetime.now().strftime("%Y-%m-%d")
+        try:
+            query_date = datetime.strptime(source[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return jsonify({"error": "日期格式错误，请使用 YYYY-MM-DD"}), 400
+        records = read_day_records(query_date, device_key or None)
+        scope = query_date.strftime("%Y-%m-%d")
+
+    if not records:
+        return jsonify({"error": "该时间范围没有数据"}), 404
+
+    body = reports.build_csv(report_type, records, interval=interval, price=price)
+    device_name = ""
+    if device_key:
+        device_name = next(
+            (d["name"] for d in load_devices() if d["key"] == device_key), device_key
+        )
+
+    filename = "%s_%s%s.csv" % (
+        reports.REPORT_LABELS[report_type],
+        scope,
+        ("_" + device_name) if device_name else "",
+    )
+    # 带 BOM，否则 Excel 打开中文是乱码
+    payload = ("﻿" + body).encode("utf-8")
+    ascii_name = quote(filename)
+    return Response(
+        payload,
+        mimetype="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": "attachment; filename=export.csv; filename*=UTF-8''%s" % ascii_name,
+            "Content-Length": str(len(payload)),
+        },
     )
 
 

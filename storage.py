@@ -143,6 +143,38 @@ class CSVStore:
         records.sort(key=lambda r: r["timestamp"])
         return records
 
+    def read_month(self, year: int, month: int, device_key=None) -> list:
+        """读整月的记录，给月度报表用。"""
+        records = []
+        with self.lock:
+            for path, legacy in (
+                (self.data_dir / ("%s%04d-%02d.csv" % (CSV_PREFIX, year, month)), False),
+                (self.data_dir / ("%s%04d-%02d.csv" % (LEGACY_CSV_PREFIX, year, month)), True),
+            ):
+                if not path.exists():
+                    continue
+                if legacy and device_key and device_key != LEGACY_DEVICE_KEY:
+                    continue
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        for row in csv.DictReader(f):
+                            key = (row.get("device_key") or LEGACY_DEVICE_KEY) if not legacy else LEGACY_DEVICE_KEY
+                            if device_key and key != device_key:
+                                continue
+                            records.append({
+                                "timestamp": row.get("timestamp"),
+                                "device_key": key,
+                                "device_name": (row.get("device_name") if not legacy else LEGACY_DEVICE_NAME) or key,
+                                "power_w": _float(row.get("power_w"), 0.0),
+                                "total_energy_kwh": _float(row.get("total_energy_kwh"), 0.0),
+                                "voltage_v": _float(row.get("voltage_v")),
+                                "current_a": _float(row.get("current_a")),
+                            })
+                except Exception as e:
+                    logger.error("读取月度 CSV 失败: %s", e)
+        records.sort(key=lambda r: r["timestamp"] or "")
+        return records
+
     def available_dates(self, year: int, month: int) -> list:
         dates = set()
         for path in (
@@ -364,6 +396,48 @@ class MySQLStore:
                 except Exception:
                     pass
 
+    def read_month(self, year: int, month: int, device_key=None) -> list:
+        if not self.enabled:
+            return []
+        prefix = "%04d-%02d" % (year, month)
+        with self.lock:
+            conn = self._connect()
+            if not conn:
+                return []
+            try:
+                cursor = conn.cursor()
+                sql = """
+                    SELECT record_time, device_key, device_name, power_w,
+                           total_energy_kwh, voltage_v, current_a
+                    FROM electricity_records
+                    WHERE DATE_FORMAT(record_time, '%%Y-%%m') = %s
+                """
+                params = [prefix]
+                if device_key:
+                    sql += " AND device_key = %s"
+                    params.append(device_key)
+                sql += " ORDER BY record_time"
+                cursor.execute(sql, params)
+                records = [{
+                    "timestamp": row[0].strftime("%Y-%m-%d %H:%M:%S"),
+                    "device_key": row[1] or LEGACY_DEVICE_KEY,
+                    "device_name": row[2] or (row[1] or LEGACY_DEVICE_KEY),
+                    "power_w": float(row[3] or 0),
+                    "total_energy_kwh": float(row[4] or 0),
+                    "voltage_v": float(row[5]) if row[5] is not None else None,
+                    "current_a": float(row[6]) if row[6] is not None else None,
+                } for row in cursor.fetchall()]
+                cursor.close()
+                conn.close()
+                return records
+            except Exception as e:
+                logger.error("读取 MySQL 月度数据失败: %s", e)
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                return []
+
     def read_day(self, date, device_key=None) -> list:
         if not self.enabled:
             return []
@@ -421,3 +495,16 @@ def read_day_records(date, device_key=None) -> list:
         except Exception as e:
             logger.warning("MySQL 查询失败，回退 CSV: %s", e)
     return CSVStore().read_day(date, device_key)
+
+
+def read_month_records(year: int, month: int, device_key=None) -> list:
+    """整月记录，导出月度报表用。"""
+    mysql_config = load_mysql_config()
+    if (mysql_config.get("host") or "").strip():
+        try:
+            records = MySQLStore(mysql_config, init=False).read_month(year, month, device_key)
+            if records:
+                return records
+        except Exception as e:
+            logger.warning("MySQL 月度查询失败，回退 CSV: %s", e)
+    return CSVStore().read_month(year, month, device_key)
