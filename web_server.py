@@ -24,16 +24,19 @@ from config_store import (
     load_ha_config,
     load_mqtt_config,
     load_mysql_config,
+    load_weather_config,
     remove_device,
     save_devices,
     save_ha_config,
     save_mqtt_config,
     save_mysql_config,
+    save_weather_config,
     upsert_devices,
 )
 import reports
+import weather as weather_module
 from ha_client import HAClient, HAError
-from storage import CSVStore, read_day_records, read_month_records
+from storage import CSVStore, read_day_records, read_range_records
 
 WEB_CONFIG = {
     "host": os.environ.get("WEB_HOST", "0.0.0.0"),
@@ -49,6 +52,8 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 _discovery_cache = {"time": 0.0, "devices": [], "states": []}
 _discovery_lock = threading.Lock()
 DISCOVERY_TTL = 20
+
+_weather_service = weather_module.WeatherService(load_weather_config)
 
 
 @app.route("/")
@@ -92,6 +97,7 @@ def _realtime_payload() -> dict:
             "model": config.get("model", ""),
             "manufacturer": config.get("manufacturer", ""),
             "energy_mode": config.get("energy_mode", "auto"),
+            "standby_w": config.get("standby_w", 5.0),
             "entities": config.get("entities", {}),
             "decoders": config.get("decoders", {}),
             "has_switch": bool((config.get("entities") or {}).get("switch")),
@@ -122,6 +128,7 @@ def _realtime_payload() -> dict:
         "device_count": len(devices),
         "online_count": sum(1 for d in devices if d["available"]),
         "devices": devices,
+        "weather": state.get("weather"),
         "last_update": state.get("last_update") or datetime.now().isoformat(),
     }
 
@@ -203,8 +210,8 @@ def get_available_dates():
 
 @app.route("/api/export")
 def export_csv():
-    """导出报表：明细 / 分时 / 每日，中文表头，Excel 直接能开。"""
-    report_type = (request.args.get("type") or "detail").strip()
+    """导出报表：使用时段 / 分时 / 每日 / 明细，按日期区间，中文表头 + BOM。"""
+    report_type = (request.args.get("type") or "sessions").strip()
     if report_type not in reports.REPORT_TYPES:
         return jsonify({"error": "未知的报表类型"}), 400
 
@@ -212,62 +219,117 @@ def export_csv():
     if device_key in ("all", "__all__"):
         device_key = ""
 
+    today = datetime.now().date()
+    end_text = (request.args.get("end") or "").strip()
+    start_text = (request.args.get("start") or "").strip()
+    single_day = (request.args.get("date") or "").strip()
+    if single_day and not start_text and not end_text:
+        # 兼容老的单日导出链接
+        start_text = end_text = single_day
     try:
-        interval = max(0, int(request.args.get("interval") or 0))
-    except (TypeError, ValueError):
-        interval = 0
-    try:
-        price = max(0.0, float(request.args.get("price") or 0))
-    except (TypeError, ValueError):
-        price = 0.0
+        end_date = datetime.strptime(end_text, "%Y-%m-%d").date() if end_text else today
+        start_date = datetime.strptime(start_text, "%Y-%m-%d").date() if start_text else end_date
+    except ValueError:
+        return jsonify({"error": "日期格式错误，请使用 YYYY-MM-DD"}), 400
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+    if (end_date - start_date).days > 366:
+        return jsonify({"error": "时间跨度最多一年"}), 400
 
-    date_str = (request.args.get("date") or "").strip()
-    month_str = (request.args.get("month") or "").strip()
-
-    if report_type == "daily" or (month_str and not date_str):
-        source = month_str or date_str or datetime.now().strftime("%Y-%m")
+    def _number(name, default, minimum, maximum):
         try:
-            year, month = int(source[:4]), int(source[5:7])
-            datetime(year, month, 1)
+            value = float(request.args.get(name))
         except (TypeError, ValueError):
-            return jsonify({"error": "月份格式错误，请使用 YYYY-MM"}), 400
-        records = read_month_records(year, month, device_key or None)
-        scope = "%04d-%02d" % (year, month)
-    else:
-        source = date_str or datetime.now().strftime("%Y-%m-%d")
-        try:
-            query_date = datetime.strptime(source[:10], "%Y-%m-%d").date()
-        except ValueError:
-            return jsonify({"error": "日期格式错误，请使用 YYYY-MM-DD"}), 400
-        records = read_day_records(query_date, device_key or None)
-        scope = query_date.strftime("%Y-%m-%d")
+            return default
+        return min(max(value, minimum), maximum)
 
+    interval = int(_number("interval", 0, 0, 86400))
+    price = _number("price", 0.0, 0.0, 100.0)
+    standby_w = _number("standby", reports.DEFAULT_STANDBY_W, 0.0, 10000.0)
+    min_minutes = _number("min_minutes", reports.DEFAULT_MIN_MINUTES, 0.0, 1440.0)
+    merge_minutes = _number("merge_minutes", reports.DEFAULT_MERGE_MINUTES, 0.0, 1440.0)
+
+    records = read_range_records(start_date, end_date, device_key or None)
     if not records:
-        return jsonify({"error": "该时间范围没有数据"}), 404
+        return jsonify({"error": "该时间段没有数据"}), 404
 
-    body = reports.build_csv(report_type, records, interval=interval, price=price)
+    # 每个插座可以有自己的启动判定功率；查询串里显式传了就以传的为准
+    thresholds = {}
+    if request.args.get("standby") is None:
+        thresholds = {
+            d["key"]: d.get("standby_w", reports.DEFAULT_STANDBY_W) for d in load_devices()
+        }
+
+    body = reports.build_csv(
+        report_type,
+        records,
+        interval=interval,
+        price=price,
+        thresholds=thresholds,
+        standby_w=standby_w,
+        min_minutes=min_minutes,
+        merge_minutes=merge_minutes,
+    )
+
     device_name = ""
     if device_key:
-        device_name = next(
-            (d["name"] for d in load_devices() if d["key"] == device_key), device_key
-        )
+        device_name = next((d["name"] for d in load_devices() if d["key"] == device_key), device_key)
 
+    scope = start_date.strftime("%Y-%m-%d")
+    if end_date != start_date:
+        scope += "_至_" + end_date.strftime("%Y-%m-%d")
     filename = "%s_%s%s.csv" % (
-        reports.REPORT_LABELS[report_type],
-        scope,
-        ("_" + device_name) if device_name else "",
-    )
+        reports.REPORT_LABELS[report_type], scope, ("_" + device_name) if device_name else "")
+
     # 带 BOM，否则 Excel 打开中文是乱码
-    payload = ("﻿" + body).encode("utf-8")
-    ascii_name = quote(filename)
+    payload = ("\ufeff" + body).encode("utf-8")
     return Response(
         payload,
         mimetype="text/csv; charset=utf-8",
         headers={
-            "Content-Disposition": "attachment; filename=export.csv; filename*=UTF-8''%s" % ascii_name,
+            "Content-Disposition": "attachment; filename=export.csv; filename*=UTF-8''" + quote(filename),
             "Content-Length": str(len(payload)),
         },
     )
+
+
+# =============================================================================
+# 天气
+# =============================================================================
+
+@app.route("/api/weather")
+def get_weather():
+    """当前天气；HA 来源会顺带把 weather 实体列表给前端选。"""
+    states = []
+    try:
+        _devices, states = _discover()
+    except HAError:
+        states = []
+    try:
+        current = _weather_service.current(states)
+    except Exception as e:
+        return jsonify({"error": "获取天气失败: %s" % e}), 502
+    return jsonify({
+        "weather": current,
+        "config": load_weather_config(),
+        "entities": weather_module.list_ha_weather_entities(states),
+    })
+
+
+@app.route("/api/config/weather", methods=["GET"])
+def get_weather_config_api():
+    return jsonify(load_weather_config())
+
+
+@app.route("/api/config/weather", methods=["POST"])
+def save_weather_config_api():
+    data = request.get_json(silent=True) or {}
+    try:
+        config = save_weather_config(data)
+        _weather_service.cache_time = 0.0
+        return jsonify({"success": True, "config": config, "message": "天气设置已保存"})
+    except Exception as e:
+        return jsonify({"error": "保存失败: %s" % e}), 500
 
 
 # =============================================================================

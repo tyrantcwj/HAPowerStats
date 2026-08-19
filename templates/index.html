@@ -76,6 +76,7 @@
         .card.total .card-value { color: #00ff88; }
         .card.today .card-value { color: #00d4ff; }
         .card.month .card-value { color: #ff6699; }
+        .card.weather .card-value { color: #7fe3ff; }
 
         /* 面板 */
         .panel {
@@ -353,6 +354,12 @@
                     <div class="card-title">本月用电</div>
                     <div class="card-value"><span id="monthValue">0.0000</span><span class="card-unit">kWh</span></div>
                 </div>
+                <div class="card weather">
+                    <div class="card-icon" id="weatherIcon">🌤️</div>
+                    <div class="card-title"><span id="weatherLocation">天气</span></div>
+                    <div class="card-value"><span id="weatherTemp">--</span><span class="card-unit">℃</span></div>
+                    <div class="form-hint" id="weatherDesc" style="margin-top:8px;">未配置</div>
+                </div>
             </div>
 
             <div class="panel">
@@ -428,25 +435,31 @@
                 <div class="panel-header">
                     <div>
                         <div class="panel-title">📥 导出报表</div>
-                        <div class="panel-subtitle">中文表头、带 BOM，Excel 打开不乱码；电量按功率积分计算，比累计计数器差值平滑</div>
+                        <div class="panel-subtitle">按时间段导出，中文表头 + BOM，Excel 打开不乱码；电量按功率积分计算</div>
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                        <button class="btn btn-primary btn-sm" onclick="setExportRange(7)">最近 7 天</button>
+                        <button class="btn btn-ghost btn-sm" onclick="setExportRange(30)">最近 30 天</button>
+                        <button class="btn btn-ghost btn-sm" onclick="setExportRange(1)">今天</button>
                     </div>
                 </div>
                 <div class="controls-row">
                     <div class="form-group">
                         <label class="form-label">报表类型</label>
                         <select id="exportType" class="form-input" onchange="onExportTypeChange()">
-                            <option value="hourly">分时统计（某天，每小时一段）</option>
-                            <option value="daily">每日统计（某月，每天一行）</option>
+                            <option value="sessions">使用时段（每次启动一行，带气温天气）</option>
+                            <option value="daily">每日统计（每天一行）</option>
+                            <option value="hourly">分时统计（每小时一段）</option>
                             <option value="detail">用电明细（原始采样）</option>
                         </select>
                     </div>
-                    <div class="form-group" id="exportDayBox">
-                        <label class="form-label">日期</label>
-                        <input type="date" id="exportDate" class="form-input">
+                    <div class="form-group">
+                        <label class="form-label">开始日期</label>
+                        <input type="date" id="exportStart" class="form-input">
                     </div>
-                    <div class="form-group" id="exportMonthBox" style="display:none;">
-                        <label class="form-label">月份</label>
-                        <input type="month" id="exportMonth" class="form-input">
+                    <div class="form-group">
+                        <label class="form-label">结束日期</label>
+                        <input type="date" id="exportEnd" class="form-input">
                     </div>
                     <div class="form-group">
                         <label class="form-label">插座</label>
@@ -462,6 +475,24 @@
                         </select>
                     </div>
                     <button class="btn btn-success" onclick="exportReport()">📥 导出 CSV</button>
+                </div>
+                <div class="controls-row" id="sessionParams">
+                    <div class="form-group">
+                        <label class="form-label">启动判定功率 (W)</label>
+                        <input type="number" id="sessionStandby" class="form-input" placeholder="按各插座设置" step="0.5" style="width:150px;">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">最短时长 (分钟)</label>
+                        <input type="number" id="sessionMin" class="form-input" value="2" step="1" style="width:130px;">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">合并间隔 (分钟)</label>
+                        <input type="number" id="sessionMerge" class="form-input" value="10" step="1" style="width:130px;">
+                    </div>
+                    <div class="form-hint" style="max-width:420px;">
+                        功率超过「启动判定功率」算电器在工作；中途停机在「合并间隔」以内算同一次使用
+                        （洗衣机漂洗间歇、空调压缩机停机都属于这种）
+                    </div>
                 </div>
                 <div id="exportResult" class="connection-status" style="display:none;"></div>
             </div>
@@ -519,6 +550,51 @@
                 </div>
                 <div id="deviceConfigList"><div class="no-data">还没有添加插座</div></div>
                 <div id="deviceSaveResult" class="connection-status" style="display:none;"></div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header">
+                    <div>
+                        <div class="panel-title">🌤️ 天气与气温</div>
+                        <div class="panel-subtitle">天气会跟着每次采样一起记录，导出报表时标出「当时多少度、什么天气」</div>
+                    </div>
+                    <button class="btn btn-ghost btn-sm" onclick="loadWeather()">🔄 刷新</button>
+                </div>
+                <div class="settings-form">
+                    <div class="form-row">
+                        <label>数据来源</label>
+                        <select id="weatherSource" onchange="onWeatherSourceChange()">
+                            <option value="auto">自动（优先用 HA 的天气实体，取不到则用 Open-Meteo）</option>
+                            <option value="ha">只用 HA 天气实体</option>
+                            <option value="openmeteo">只用 Open-Meteo（免密钥公共接口）</option>
+                            <option value="off">不记录天气</option>
+                        </select>
+                    </div>
+                    <div class="form-row" id="weatherEntityRow">
+                        <label>HA 天气实体</label>
+                        <select id="weatherEntity"><option value="">自动选第一个</option></select>
+                        <div class="form-hint">HA 里的 weather.* 实体，比如和风天气、彩云、met.no</div>
+                    </div>
+                    <div class="form-row" id="weatherLocationRow">
+                        <label>地点名称</label>
+                        <input type="text" id="weatherLocationName" placeholder="上海浦东">
+                    </div>
+                    <div class="controls-row" id="weatherCoordRow">
+                        <div class="form-group">
+                            <label class="form-label">纬度</label>
+                            <input type="number" id="weatherLat" class="form-input" step="0.0001" style="width:160px;">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">经度</label>
+                            <input type="number" id="weatherLon" class="form-input" step="0.0001" style="width:160px;">
+                        </div>
+                        <div class="form-hint">默认是上海浦东 (31.2231, 121.5397)</div>
+                    </div>
+                    <div class="form-actions">
+                        <button class="btn btn-success" onclick="saveWeatherConfig()">💾 保存</button>
+                    </div>
+                    <div id="weatherResult" class="connection-status" style="display:none;"></div>
+                </div>
             </div>
 
             <div class="panel">
@@ -601,8 +677,7 @@
         document.addEventListener('DOMContentLoaded', function () {
             const todayStr = new Date().toISOString().split('T')[0];
             document.getElementById('queryDate').value = todayStr;
-            document.getElementById('exportDate').value = todayStr;
-            document.getElementById('exportMonth').value = todayStr.slice(0, 7);
+            setExportRange(7);
             const savedPrice = localStorage.getItem('electricityPrice');
             if (savedPrice) document.getElementById('electricityPrice').value = savedPrice;
 
@@ -612,6 +687,7 @@
             loadDevices();
             loadMqttConfig();
             loadMysqlConfig();
+            loadWeather();
 
             setInterval(loadRealtimeData, 10000);
         });
@@ -677,6 +753,7 @@
             }
 
             renderDeviceCards(data.devices);
+            if (data.weather !== undefined) renderWeather(data.weather);
             syncHistoryDeviceOptions(data.devices);
             pushChartPoint(data);
             updateCostEstimate();
@@ -933,26 +1010,38 @@
 
         function onExportTypeChange() {
             const type = document.getElementById('exportType').value;
-            document.getElementById('exportDayBox').style.display = type === 'daily' ? 'none' : 'flex';
-            document.getElementById('exportMonthBox').style.display = type === 'daily' ? 'flex' : 'none';
             document.getElementById('exportIntervalBox').style.display = type === 'detail' ? 'flex' : 'none';
+            document.getElementById('sessionParams').style.display = type === 'sessions' ? 'flex' : 'none';
+        }
+
+        function setExportRange(days) {
+            const end = new Date();
+            const start = new Date();
+            start.setDate(end.getDate() - (days - 1));
+            document.getElementById('exportStart').value = start.toISOString().split('T')[0];
+            document.getElementById('exportEnd').value = end.toISOString().split('T')[0];
+            onExportTypeChange();
         }
 
         function exportReport() {
             const type = document.getElementById('exportType').value;
-            const device = document.getElementById('exportDevice').value;
-            const price = document.getElementById('electricityPrice').value || 0;
-            const params = new URLSearchParams({ type: type, device: device, price: price });
+            const start = document.getElementById('exportStart').value;
+            const end = document.getElementById('exportEnd').value;
+            if (!start || !end) { showStatus('exportResult', 'error', '请选择开始和结束日期'); return; }
 
-            if (type === 'daily') {
-                const month = document.getElementById('exportMonth').value;
-                if (!month) { showStatus('exportResult', 'error', '请选择月份'); return; }
-                params.set('month', month);
-            } else {
-                const date = document.getElementById('exportDate').value;
-                if (!date) { showStatus('exportResult', 'error', '请选择日期'); return; }
-                params.set('date', date);
-                if (type === 'detail') params.set('interval', document.getElementById('exportInterval').value);
+            const params = new URLSearchParams({
+                type: type,
+                start: start,
+                end: end,
+                device: document.getElementById('exportDevice').value,
+                price: document.getElementById('electricityPrice').value || 0
+            });
+            if (type === 'detail') params.set('interval', document.getElementById('exportInterval').value);
+            if (type === 'sessions') {
+                const standby = document.getElementById('sessionStandby').value;
+                if (standby !== '') params.set('standby', standby);
+                params.set('min_minutes', document.getElementById('sessionMin').value || 2);
+                params.set('merge_minutes', document.getElementById('sessionMerge').value || 10);
             }
 
             showStatus('exportResult', 'testing', '正在生成报表...');
@@ -979,6 +1068,90 @@
                     showStatus('exportResult', 'success', '已导出：' + result.name);
                 })
                 .catch(error => showStatus('exportResult', 'error', error.message));
+        }
+
+        // =====================================================================
+        // 天气
+        // =====================================================================
+        const WEATHER_ICONS = {
+            sunny: '☀️', 'clear-night': '🌙', partlycloudy: '⛅', cloudy: '☁️',
+            rainy: '🌧️', pouring: '🌧️', 'lightning-rainy': '⛈️', lightning: '🌩️',
+            snowy: '❄️', 'snowy-rainy': '🌨️', fog: '🌫️', windy: '💨', hail: '🌨️'
+        };
+
+        function renderWeather(weather) {
+            const icon = document.getElementById('weatherIcon');
+            const temp = document.getElementById('weatherTemp');
+            const desc = document.getElementById('weatherDesc');
+            const location = document.getElementById('weatherLocation');
+
+            if (!weather) {
+                icon.textContent = '🌤️';
+                temp.textContent = '--';
+                location.textContent = '天气';
+                desc.textContent = '未配置（到「系统设置 → 天气与气温」开启）';
+                return;
+            }
+            icon.textContent = WEATHER_ICONS[weather.condition] || '🌤️';
+            temp.textContent = (weather.temperature_c === null || weather.temperature_c === undefined)
+                ? '--' : Number(weather.temperature_c).toFixed(1);
+            location.textContent = weather.location || '天气';
+            const parts = [weather.condition_text || weather.condition || ''];
+            if (weather.humidity !== null && weather.humidity !== undefined) {
+                parts.push('湿度 ' + Math.round(weather.humidity) + '%');
+            }
+            parts.push(weather.source === 'ha' ? '来自 HA' : 'Open-Meteo');
+            if (weather.stale) parts.push('⚠️ 数据已过期');
+            desc.textContent = parts.filter(Boolean).join(' · ');
+        }
+
+        function loadWeather() {
+            fetch('/api/weather')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.error) { showStatus('weatherResult', 'error', data.error); return; }
+                    renderWeather(data.weather);
+                    const config = data.config || {};
+                    document.getElementById('weatherSource').value = config.source || 'auto';
+                    document.getElementById('weatherLocationName').value = config.location_name || '';
+                    document.getElementById('weatherLat').value = config.latitude;
+                    document.getElementById('weatherLon').value = config.longitude;
+                    const select = document.getElementById('weatherEntity');
+                    select.innerHTML = '<option value="">自动选第一个</option>' +
+                        (data.entities || []).map(e =>
+                            '<option value="' + escapeHtml(e.entity_id) + '">' + escapeHtml(e.name) +
+                            (e.temperature !== null && e.temperature !== undefined ? ' (' + e.temperature + '℃)' : '') +
+                            '</option>').join('');
+                    select.value = config.entity_id || '';
+                    onWeatherSourceChange();
+                })
+                .catch(() => {});
+        }
+
+        function onWeatherSourceChange() {
+            const source = document.getElementById('weatherSource').value;
+            document.getElementById('weatherEntityRow').style.display =
+                (source === 'auto' || source === 'ha') ? 'block' : 'none';
+            const showCoords = (source === 'auto' || source === 'openmeteo');
+            document.getElementById('weatherCoordRow').style.display = showCoords ? 'flex' : 'none';
+            document.getElementById('weatherLocationRow').style.display = showCoords ? 'block' : 'none';
+        }
+
+        function saveWeatherConfig() {
+            showStatus('weatherResult', 'testing', '保存中...');
+            postJson('/api/config/weather', {
+                source: document.getElementById('weatherSource').value,
+                entity_id: document.getElementById('weatherEntity').value,
+                location_name: document.getElementById('weatherLocationName').value.trim(),
+                latitude: parseFloat(document.getElementById('weatherLat').value),
+                longitude: parseFloat(document.getElementById('weatherLon').value)
+            })
+                .then(result => {
+                    showStatus('weatherResult', result.error ? 'error' : 'success',
+                               result.error || result.message);
+                    if (!result.error) loadWeather();
+                })
+                .catch(() => showStatus('weatherResult', 'error', '保存失败'));
         }
 
         // =====================================================================
@@ -1195,6 +1368,11 @@
                                     '</select>' +
                                 '</div>' +
                                 '<div class="form-group">' +
+                                    '<label class="form-label">启动判定功率 (W)</label>' +
+                                    '<input type="number" step="0.5" class="form-input device-standby-input" style="width:130px;" data-index="' +
+                                        index + '" value="' + (device.standby_w === undefined ? 5 : device.standby_w) + '">' +
+                                '</div>' +
+                                '<div class="form-group">' +
                                     '<label class="form-label">电量统计</label>' +
                                     '<select class="form-input device-mode-input" data-index="' + index + '">' +
                                         '<option value="auto"' + (device.energy_mode === 'auto' ? ' selected' : '') + '>自动</option>' +
@@ -1219,11 +1397,13 @@
                 const nameInput = document.querySelector('.device-name-input[data-index="' + index + '"]');
                 const enabledInput = document.querySelector('.device-enabled-input[data-index="' + index + '"]');
                 const modeInput = document.querySelector('.device-mode-input[data-index="' + index + '"]');
+                const standbyInput = document.querySelector('.device-standby-input[data-index="' + index + '"]');
                 return {
                     key: device.key,
                     name: nameInput ? nameInput.value.trim() : device.name,
                     enabled: enabledInput ? enabledInput.value === '1' : device.enabled,
                     energy_mode: modeInput ? modeInput.value : device.energy_mode,
+                    standby_w: standbyInput ? parseFloat(standbyInput.value) : device.standby_w,
                     model: device.model,
                     manufacturer: device.manufacturer,
                     entities: device.entities,

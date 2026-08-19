@@ -14,6 +14,7 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", "electricity_data"))
 HA_CONFIG_FILE = CONFIG_DIR / "ha_config.json"
 DEVICES_FILE = CONFIG_DIR / "devices.json"
 MQTT_CONFIG_FILE = CONFIG_DIR / "mqtt_config.json"
+WEATHER_CONFIG_FILE = CONFIG_DIR / "weather_config.json"
 MYSQL_CONFIG_FILE = CONFIG_DIR / "mysql_config.json"
 STATE_FILE = DATA_DIR / "electricity_state.json"
 
@@ -49,6 +50,18 @@ DEFAULT_HA = {
     "url": "",
     "token": "",
 }
+
+# 天气来源：auto=优先 HA 的 weather 实体、取不到就用 Open-Meteo
+DEFAULT_WEATHER = {
+    "source": "auto",
+    "entity_id": "",
+    "location_name": "上海浦东",
+    "latitude": 31.2231,
+    "longitude": 121.5397,
+}
+
+# 判定电器「在工作」的默认功率阈值（瓦），低于它算待机
+DEFAULT_STANDBY_W = 5.0
 
 DEFAULT_MYSQL = {
     "host": "",
@@ -169,6 +182,12 @@ def normalize_device(raw: dict, index: int = 0) -> dict:
     if energy_mode not in ENERGY_MODES:
         energy_mode = "auto"
 
+    try:
+        standby_w = float(raw.get("standby_w", DEFAULT_STANDBY_W))
+    except (TypeError, ValueError):
+        standby_w = DEFAULT_STANDBY_W
+    standby_w = min(max(standby_w, 0.0), 10000.0)
+
     name = (raw.get("name") or "").strip() or key
     return {
         "key": key,
@@ -177,6 +196,7 @@ def normalize_device(raw: dict, index: int = 0) -> dict:
         "model": (raw.get("model") or "").strip(),
         "manufacturer": (raw.get("manufacturer") or "").strip(),
         "energy_mode": energy_mode,
+        "standby_w": standby_w,
         "entities": entities,
         "decoders": decoders,
     }
@@ -250,6 +270,7 @@ def upsert_devices(new_devices) -> list:
             device["name"] = existing.get("name") or device["name"]
             device["enabled"] = existing.get("enabled", True)
             device["energy_mode"] = existing.get("energy_mode", device["energy_mode"])
+            device["standby_w"] = existing.get("standby_w", device["standby_w"])
         else:
             order.append(device["key"])
         by_key[device["key"]] = device
@@ -270,12 +291,40 @@ def devices_signature(devices) -> str:
             "name": d.get("name"),
             "enabled": d.get("enabled"),
             "energy_mode": d.get("energy_mode"),
+            "standby_w": d.get("standby_w"),
             "entities": d.get("entities"),
             "decoders": d.get("decoders"),
         }
         for d in devices or []
     ]
     return json.dumps(payload, sort_keys=True, ensure_ascii=False)
+
+
+def load_weather_config() -> dict:
+    config = load_json(WEATHER_CONFIG_FILE, DEFAULT_WEATHER)
+    source = (config.get("source") or "auto").strip().lower()
+    if source not in ("auto", "ha", "openmeteo", "off"):
+        source = "auto"
+    config["source"] = source
+    for key, default in (("latitude", DEFAULT_WEATHER["latitude"]),
+                         ("longitude", DEFAULT_WEATHER["longitude"])):
+        try:
+            config[key] = float(config.get(key))
+        except (TypeError, ValueError):
+            config[key] = default
+    config["entity_id"] = (config.get("entity_id") or "").strip()
+    config["location_name"] = (config.get("location_name") or DEFAULT_WEATHER["location_name"]).strip()
+    return config
+
+
+def save_weather_config(data: dict) -> dict:
+    current = load_weather_config()
+    merged = dict(current)
+    for key in ("source", "entity_id", "location_name", "latitude", "longitude"):
+        if key in data:
+            merged[key] = data[key]
+    save_json(WEATHER_CONFIG_FILE, merged)
+    return load_weather_config()
 
 
 def load_mqtt_config() -> dict:

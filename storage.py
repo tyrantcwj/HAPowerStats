@@ -8,7 +8,7 @@ CSV 采用新文件名 records_YYYY-MM.csv（带设备列）；
 import csv
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from config_store import DATA_DIR, LEGACY_DEVICE_KEY, load_mysql_config
@@ -25,6 +25,8 @@ CSV_HEADER = [
     "total_energy_kwh",
     "voltage_v",
     "current_a",
+    "temperature_c",
+    "weather",
 ]
 LEGACY_DEVICE_NAME = "默认功率实体"
 
@@ -66,6 +68,37 @@ class CSVStore:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.lock = threading.Lock()
 
+    def _upgrade_header(self, path: Path):
+        """老文件没有气温/天气列，补齐表头后再往里追加，避免列错位。"""
+        try:
+            with open(path, "r", encoding="utf-8", newline="") as f:
+                reader = csv.reader(f)
+                header = next(reader, None)
+                if header is None or header == CSV_HEADER:
+                    return
+                if not set(header).issubset(set(CSV_HEADER)):
+                    return
+                rows = list(reader)
+        except Exception as e:
+            logger.error("检查 CSV 表头失败: %s", e)
+            return
+
+        try:
+            index_of = {name: header.index(name) for name in header}
+            tmp = path.with_suffix(".upgrading")
+            with open(tmp, "w", encoding="utf-8", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(CSV_HEADER)
+                for row in rows:
+                    writer.writerow([
+                        row[index_of[name]] if name in index_of and index_of[name] < len(row) else ""
+                        for name in CSV_HEADER
+                    ])
+            tmp.replace(path)
+            logger.info("已为 %s 补上气温/天气列", path.name)
+        except Exception as e:
+            logger.error("升级 CSV 表头失败: %s", e)
+
     def write_rows(self, rows: list):
         if not rows:
             return
@@ -73,6 +106,8 @@ class CSVStore:
             try:
                 path = csv_path(data_dir=self.data_dir)
                 exists = path.exists()
+                if exists:
+                    self._upgrade_header(path)
                 with open(path, "a", newline="", encoding="utf-8") as f:
                     writer = csv.writer(f)
                     if not exists:
@@ -86,6 +121,8 @@ class CSVStore:
                             "" if row.get("total_energy_kwh") is None else round(row["total_energy_kwh"], 4),
                             "" if row.get("voltage_v") is None else round(row["voltage_v"], 1),
                             "" if row.get("current_a") is None else round(row["current_a"], 3),
+                            "" if row.get("temperature_c") is None else round(row["temperature_c"], 1),
+                            row.get("weather") or "",
                         ])
             except Exception as e:
                 logger.error("写入 CSV 失败: %s", e)
@@ -115,6 +152,8 @@ class CSVStore:
                                 "total_energy_kwh": _float(row.get("total_energy_kwh"), 0.0),
                                 "voltage_v": _float(row.get("voltage_v")),
                                 "current_a": _float(row.get("current_a")),
+                                "temperature_c": _float(row.get("temperature_c")),
+                                "weather": row.get("weather") or "",
                             })
                 except Exception as e:
                     logger.error("读取 CSV 失败: %s", e)
@@ -136,6 +175,8 @@ class CSVStore:
                                     "total_energy_kwh": _float(row.get("total_energy_kwh"), 0.0),
                                     "voltage_v": None,
                                     "current_a": None,
+                                    "temperature_c": None,
+                                    "weather": "",
                                 })
                     except Exception as e:
                         logger.error("读取旧 CSV 失败: %s", e)
@@ -169,9 +210,29 @@ class CSVStore:
                                 "total_energy_kwh": _float(row.get("total_energy_kwh"), 0.0),
                                 "voltage_v": _float(row.get("voltage_v")),
                                 "current_a": _float(row.get("current_a")),
+                                "temperature_c": _float(row.get("temperature_c")),
+                                "weather": row.get("weather") or "",
                             })
                 except Exception as e:
                     logger.error("读取月度 CSV 失败: %s", e)
+        records.sort(key=lambda r: r["timestamp"] or "")
+        return records
+
+    def read_range(self, start, end, device_key=None) -> list:
+        """读一个日期区间（含首尾），跨月自动拼接。"""
+        start = _to_date(start)
+        end = _to_date(end)
+        if start > end:
+            start, end = end, start
+
+        records = []
+        cursor = start.replace(day=1)
+        while cursor <= end:
+            for record in self.read_month(cursor.year, cursor.month, device_key):
+                stamp = (record.get("timestamp") or "")[:10]
+                if stamp and start.isoformat() <= stamp <= end.isoformat():
+                    records.append(record)
+            cursor = (cursor + timedelta(days=32)).replace(day=1)
         records.sort(key=lambda r: r["timestamp"] or "")
         return records
 
@@ -261,6 +322,8 @@ class MySQLStore:
                     total_energy_kwh DECIMAL(12,4) NOT NULL,
                     voltage_v DECIMAL(8,2) NULL,
                     current_a DECIMAL(8,3) NULL,
+                    temperature_c DECIMAL(5,1) NULL,
+                    weather VARCHAR(32) NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     INDEX idx_record_time (record_time),
                     INDEX idx_device_time (device_key, record_time)
@@ -273,6 +336,8 @@ class MySQLStore:
                 ("device_name", "ADD COLUMN device_name VARCHAR(128) DEFAULT ''"),
                 ("voltage_v", "ADD COLUMN voltage_v DECIMAL(8,2) NULL"),
                 ("current_a", "ADD COLUMN current_a DECIMAL(8,3) NULL"),
+                ("temperature_c", "ADD COLUMN temperature_c DECIMAL(5,1) NULL"),
+                ("weather", "ADD COLUMN weather VARCHAR(32) NULL"),
             ):
                 if not self._column_exists(cursor, "electricity_records", column):
                     cursor.execute("ALTER TABLE electricity_records " + ddl)
@@ -341,8 +406,9 @@ class MySQLStore:
                 cursor.executemany(
                     """
                     INSERT INTO electricity_records
-                        (record_time, device_key, device_name, power_w, total_energy_kwh, voltage_v, current_a)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        (record_time, device_key, device_name, power_w, total_energy_kwh,
+                         voltage_v, current_a, temperature_c, weather)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     [
                         (
@@ -353,6 +419,8 @@ class MySQLStore:
                             row.get("total_energy_kwh") or 0.0,
                             row.get("voltage_v"),
                             row.get("current_a"),
+                            row.get("temperature_c"),
+                            (row.get("weather") or "")[:32],
                         )
                         for row in rows
                     ],
@@ -408,7 +476,7 @@ class MySQLStore:
                 cursor = conn.cursor()
                 sql = """
                     SELECT record_time, device_key, device_name, power_w,
-                           total_energy_kwh, voltage_v, current_a
+                           total_energy_kwh, voltage_v, current_a, temperature_c, weather
                     FROM electricity_records
                     WHERE DATE_FORMAT(record_time, '%%Y-%%m') = %s
                 """
@@ -426,12 +494,59 @@ class MySQLStore:
                     "total_energy_kwh": float(row[4] or 0),
                     "voltage_v": float(row[5]) if row[5] is not None else None,
                     "current_a": float(row[6]) if row[6] is not None else None,
+                    "temperature_c": float(row[7]) if row[7] is not None else None,
+                    "weather": row[8] or "",
                 } for row in cursor.fetchall()]
                 cursor.close()
                 conn.close()
                 return records
             except Exception as e:
                 logger.error("读取 MySQL 月度数据失败: %s", e)
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                return []
+
+    def read_range(self, start, end, device_key=None) -> list:
+        if not self.enabled:
+            return []
+        start_str = _to_date(start).strftime("%Y-%m-%d")
+        end_str = _to_date(end).strftime("%Y-%m-%d")
+        with self.lock:
+            conn = self._connect()
+            if not conn:
+                return []
+            try:
+                cursor = conn.cursor()
+                sql = """
+                    SELECT record_time, device_key, device_name, power_w,
+                           total_energy_kwh, voltage_v, current_a, temperature_c, weather
+                    FROM electricity_records
+                    WHERE DATE(record_time) BETWEEN %s AND %s
+                """
+                params = [start_str, end_str]
+                if device_key:
+                    sql += " AND device_key = %s"
+                    params.append(device_key)
+                sql += " ORDER BY record_time"
+                cursor.execute(sql, params)
+                records = [{
+                    "timestamp": row[0].strftime("%Y-%m-%d %H:%M:%S"),
+                    "device_key": row[1] or LEGACY_DEVICE_KEY,
+                    "device_name": row[2] or (row[1] or LEGACY_DEVICE_KEY),
+                    "power_w": float(row[3] or 0),
+                    "total_energy_kwh": float(row[4] or 0),
+                    "voltage_v": float(row[5]) if row[5] is not None else None,
+                    "current_a": float(row[6]) if row[6] is not None else None,
+                    "temperature_c": float(row[7]) if row[7] is not None else None,
+                    "weather": row[8] or "",
+                } for row in cursor.fetchall()]
+                cursor.close()
+                conn.close()
+                return records
+            except Exception as e:
+                logger.error("读取 MySQL 区间数据失败: %s", e)
                 try:
                     conn.close()
                 except Exception:
@@ -450,7 +565,7 @@ class MySQLStore:
                 cursor = conn.cursor()
                 sql = """
                     SELECT record_time, device_key, device_name, power_w,
-                           total_energy_kwh, voltage_v, current_a
+                           total_energy_kwh, voltage_v, current_a, temperature_c, weather
                     FROM electricity_records
                     WHERE DATE(record_time) = %s
                 """
@@ -471,6 +586,8 @@ class MySQLStore:
                         "total_energy_kwh": float(row[4] or 0),
                         "voltage_v": float(row[5]) if row[5] is not None else None,
                         "current_a": float(row[6]) if row[6] is not None else None,
+                        "temperature_c": float(row[7]) if row[7] is not None else None,
+                        "weather": row[8] or "",
                     })
                 cursor.close()
                 conn.close()
@@ -495,6 +612,19 @@ def read_day_records(date, device_key=None) -> list:
         except Exception as e:
             logger.warning("MySQL 查询失败，回退 CSV: %s", e)
     return CSVStore().read_day(date, device_key)
+
+
+def read_range_records(start, end, device_key=None) -> list:
+    """按日期区间取记录，导出报表用。"""
+    mysql_config = load_mysql_config()
+    if (mysql_config.get("host") or "").strip():
+        try:
+            records = MySQLStore(mysql_config, init=False).read_range(start, end, device_key)
+            if records:
+                return records
+        except Exception as e:
+            logger.warning("MySQL 区间查询失败，回退 CSV: %s", e)
+    return CSVStore().read_range(start, end, device_key)
 
 
 def read_month_records(year: int, month: int, device_key=None) -> list:

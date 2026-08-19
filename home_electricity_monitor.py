@@ -26,6 +26,7 @@ import paho.mqtt.client as mqtt
 
 import ha_client
 import mi_decode
+import weather as weather_module
 from config_store import (
     DATA_DIR,
     LEGACY_DEVICE_KEY,
@@ -36,6 +37,7 @@ from config_store import (
     load_ha_config,
     load_mqtt_config,
     load_mysql_config,
+    load_weather_config,
 )
 from ha_client import HAClient, HAError
 from storage import CSVStore, MySQLStore
@@ -136,6 +138,7 @@ class StateManager:
             "today_energy_kwh": 0.0,
             "month_energy_kwh": 0.0,
             "last_update": None,
+            "weather": None,
         }
         self.load()
 
@@ -616,6 +619,7 @@ class ElectricityMonitor:
 
         self.accumulators = {}
         self.devices_signature = None
+        self.weather_service = weather_module.WeatherService(load_weather_config)
 
     # ---------------- 设备配置热加载 ----------------
 
@@ -654,10 +658,17 @@ class ElectricityMonitor:
             return
 
         try:
-            index = ha_client.build_entity_index(client.get_states())
+            states = client.get_states()
         except HAError as e:
             logger.error("读取 HA 实体失败: %s", e)
             return
+
+        index = ha_client.build_entity_index(states)
+        current_weather = None
+        try:
+            current_weather = self.weather_service.current(states)
+        except Exception as e:
+            logger.warning("获取天气失败: %s", e)
 
         rows = []
         for device in devices:
@@ -667,11 +678,15 @@ class ElectricityMonitor:
             try:
                 row = accumulator.collect(index)
                 if row:
+                    if current_weather:
+                        row["temperature_c"] = current_weather.get("temperature_c")
+                        row["weather"] = current_weather.get("condition_text") or current_weather.get("condition")
                     rows.append(row)
             except Exception as e:
                 logger.error("[%s] 采集失败: %s", device.get("name"), e)
 
         aggregate = self.state_manager.update_aggregate()
+        self.state_manager.state["weather"] = current_weather
         self.state_manager.save()
 
         if rows:
@@ -681,13 +696,20 @@ class ElectricityMonitor:
         if self.ha_discovery and self.mqtt_manager.connected:
             self.ha_discovery.publish_state(aggregate, self.state_manager.state["devices"])
 
+        weather_note = ""
+        if current_weather:
+            weather_note = ", %s %s°C" % (
+                current_weather.get("condition_text") or "",
+                current_weather.get("temperature_c"),
+            )
         logger.info(
-            "采集完成 - 在线 %d/%d 个插座, 合计功率 %.1fW, 今日 %.4fkWh, 本月 %.4fkWh",
+            "采集完成 - 在线 %d/%d 个插座, 合计功率 %.1fW, 今日 %.4fkWh, 本月 %.4fkWh%s",
             len(rows),
             len(devices),
             aggregate["current_power_w"],
             aggregate["today_energy_kwh"],
             aggregate["month_energy_kwh"],
+            weather_note,
         )
 
     # ---------------- 运行 ----------------
