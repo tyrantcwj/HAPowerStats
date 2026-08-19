@@ -6,6 +6,8 @@ import os
 import re
 from pathlib import Path
 
+import mi_decode
+
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "config"))
 DATA_DIR = Path(os.environ.get("DATA_DIR", "electricity_data"))
 
@@ -26,6 +28,9 @@ DEVICE_ROLES = (
     "apparent_power",
     "switch",
 )
+
+# 可由小米打包寄存器解码出来的角色（没有独立实体）
+DECODER_ROLES = ("power", "voltage", "today_energy", "month_energy")
 
 # 电量统计方式：auto=有电量实体就用、没有就按功率积分
 ENERGY_MODES = ("auto", "entity", "integrate")
@@ -135,13 +140,29 @@ def normalize_device(raw: dict, index: int = 0) -> dict:
             if entity_id:
                 entities[role] = entity_id
 
-    if not entities.get("power") and not entities.get("energy"):
+    # 小米插座的打包寄存器：{角色: {entity_id, spec}}
+    decoders = {}
+    raw_decoders = raw.get("decoders") or {}
+    if isinstance(raw_decoders, dict):
+        for role in DECODER_ROLES:
+            item = raw_decoders.get(role)
+            if not isinstance(item, dict):
+                continue
+            entity_id = (item.get("entity_id") or "").strip()
+            spec = (item.get("spec") or "").strip()
+            if entity_id and spec in mi_decode.DECODER_LABELS:
+                decoders[role] = {"entity_id": entity_id, "spec": spec}
+
+    has_entity_data = bool(entities.get("power") or entities.get("energy"))
+    has_decoded_data = bool(decoders.get("power") or decoders.get("today_energy"))
+    if not has_entity_data and not has_decoded_data:
         # 既没功率也没电量，采集不到任何有效数据
         return None
 
     key = (raw.get("key") or "").strip()
     if not key:
-        base = entities.get("power") or entities.get("energy") or "device"
+        base = (entities.get("power") or entities.get("energy")
+                or (decoders.get("power") or {}).get("entity_id") or "device")
         key = _slugify(base.split(".", 1)[-1], "device_%d" % (index + 1))
 
     energy_mode = (raw.get("energy_mode") or "auto").strip().lower()
@@ -157,6 +178,7 @@ def normalize_device(raw: dict, index: int = 0) -> dict:
         "manufacturer": (raw.get("manufacturer") or "").strip(),
         "energy_mode": energy_mode,
         "entities": entities,
+        "decoders": decoders,
     }
 
 
@@ -249,6 +271,7 @@ def devices_signature(devices) -> str:
             "enabled": d.get("enabled"),
             "energy_mode": d.get("energy_mode"),
             "entities": d.get("entities"),
+            "decoders": d.get("decoders"),
         }
         for d in devices or []
     ]

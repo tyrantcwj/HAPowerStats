@@ -544,7 +544,8 @@
         const SERIES_COLORS = ['#ffaa00', '#00d4ff', '#00ff88', '#ff6699', '#b98cff', '#ffd166', '#4dd4c4', '#ff8b5e'];
         const ROLE_LABELS = {
             power: '功率', energy: '电量', voltage: '电压', current: '电流',
-            power_factor: '功率因数', frequency: '频率', apparent_power: '视在功率', switch: '开关'
+            power_factor: '功率因数', frequency: '频率', apparent_power: '视在功率', switch: '开关',
+            today_energy: '今日电量', month_energy: '本月电量'
         };
 
         let powerChart = null;
@@ -665,6 +666,10 @@
                 const sourceChip = device.energy_source === 'entity'
                     ? '<span class="chip green">电量实体累计</span>'
                     : '<span class="chip gray">功率积分推算</span>';
+                const periodChip = device.period_source === 'device'
+                    ? '<span class="chip green">今日/本月取自插座</span>' : '';
+                const decodedChip = Object.keys(device.decoders || {}).length
+                    ? '<span class="chip">小米打包数据已解码</span>' : '';
 
                 let switchHtml = '';
                 if (device.has_switch) {
@@ -695,7 +700,7 @@
                         '</div>' +
                         '<div class="device-power">' + fmt(device.power_w, 1) + '<span>W</span></div>' +
                         '<div class="device-metrics">' + metrics.join('') + '</div>' +
-                        '<div>' + sourceChip + '</div>' +
+                        '<div>' + sourceChip + periodChip + decodedChip + '</div>' +
                         switchHtml +
                     '</div>';
             }).join('');
@@ -972,33 +977,48 @@
                 return;
             }
 
+            const updatable = devices.filter(d => d.needs_update).length;
             box.innerHTML =
                 '<div class="form-hint" style="margin-bottom:12px;">共发现 ' + devices.length +
-                ' 个可用设备，勾选后点右上角「导入选中」</div>' +
+                ' 个可用设备，勾选后点右上角「导入选中」' +
+                (updatable ? '；其中 <b style="color:#ffaa00;">' + updatable +
+                             ' 个已导入的插座认出了新参数</b>，已自动勾选，重新导入即可生效' : '') +
+                '</div>' +
                 devices.map(device => {
                     const chips = (device.roles || []).map(role => {
                         const reading = (device.readings || {})[role] || {};
                         let text = ROLE_LABELS[role] || role;
-                        if (reading.state !== undefined && reading.state !== null && reading.state !== '') {
+                        if (reading.decoded && reading.value !== null && reading.value !== undefined) {
+                            text += ' ' + reading.value + (reading.unit ? ' ' + reading.unit : '');
+                        } else if (reading.state !== undefined && reading.state !== null && reading.state !== '') {
                             text += ' ' + reading.state + (reading.unit ? ' ' + reading.unit : '');
                         }
-                        return '<span class="chip">' + escapeHtml(text) + '</span>';
+                        return '<span class="chip' + (reading.decoded ? '' : '') + '">' + escapeHtml(text) +
+                               (reading.decoded ? ' <span style="opacity:0.7;">(解包)</span>' : '') + '</span>';
                     }).join('');
 
                     const entityLines = (device.roles || []).map(role => {
-                        const entityId = (device.entities || {})[role];
+                        const decoder = (device.decoders || {})[role];
+                        const entityId = decoder ? decoder.entity_id : (device.entities || {})[role];
                         return '<div class="entity-row"><span class="entity-role">' +
                                (ROLE_LABELS[role] || role) + '</span>' +
-                               '<span class="entity-id">' + escapeHtml(entityId) + '</span></div>';
+                               '<span class="entity-id">' + escapeHtml(entityId) + '</span>' +
+                               (decoder ? '<span class="chip gray">解包 ' + escapeHtml(decoder.spec) + '</span>' : '') +
+                               '</div>';
                     }).join('');
 
                     return '' +
                         '<div class="scan-item ' + (device.added ? 'added' : '') + '">' +
                             '<input type="checkbox" class="scan-check" value="' + escapeHtml(device.key) + '"' +
-                                (device.added ? '' : ' checked') + '>' +
+                                ((device.added && !device.needs_update) ? '' : ' checked') + '>' +
                             '<div style="flex:1;min-width:0;">' +
                                 '<div class="scan-title">' + escapeHtml(device.name) +
-                                    (device.added ? ' <span class="chip green">已添加</span>' : '') + '</div>' +
+                                    (device.added ? ' <span class="chip green">已添加</span>' : '') +
+                                    (device.needs_update
+                                        ? ' <span class="chip" style="background:rgba(255,170,0,0.18);color:#ffcc66;border-color:rgba(255,170,0,0.35);">可更新：' +
+                                          escapeHtml((device.new_roles || []).map(r => ROLE_LABELS[r] || r).join('、')) +
+                                          '</span>'
+                                        : '') + '</div>' +
                                 '<div class="scan-sub">' +
                                     escapeHtml([device.manufacturer, device.model].filter(Boolean).join(' · ')) +
                                     (device.source === 'prefix' ? '（按实体名归组）' : '') +
@@ -1049,10 +1069,17 @@
 
             box.innerHTML = devices.map((device, index) => {
                 const entities = device.entities || {};
+                const decoders = device.decoders || {};
                 const entityLines = Object.keys(ROLE_LABELS)
-                    .filter(role => entities[role])
-                    .map(role => '<div class="entity-row"><span class="entity-role">' + ROLE_LABELS[role] +
-                                 '</span><span class="entity-id">' + escapeHtml(entities[role]) + '</span></div>')
+                    .filter(role => entities[role] || decoders[role])
+                    .map(role => {
+                        const decoder = decoders[role];
+                        const entityId = entities[role] || decoder.entity_id;
+                        return '<div class="entity-row"><span class="entity-role">' + ROLE_LABELS[role] +
+                               '</span><span class="entity-id">' + escapeHtml(entityId) + '</span>' +
+                               (entities[role] ? '' : '<span class="chip gray">解包 ' + escapeHtml(decoder.spec) + '</span>') +
+                               '</div>';
+                    })
                     .join('');
 
                 return '' +
@@ -1082,7 +1109,7 @@
                                 '<button class="btn btn-danger btn-sm" onclick="deleteDevice(\'' + escapeHtml(device.key) + '\')">移除</button>' +
                             '</div>' +
                             '<details><summary style="cursor:pointer;color:#888;font-size:0.82em;">绑定的实体（' +
-                                Object.keys(entities).length + ' 个）</summary>' +
+                                (Object.keys(entities).length + Object.keys(decoders).length) + ' 项）</summary>' +
                                 '<div style="margin-top:8px;">' + entityLines + '</div>' +
                             '</details>' +
                         '</div>' +
@@ -1103,7 +1130,8 @@
                     energy_mode: modeInput ? modeInput.value : device.energy_mode,
                     model: device.model,
                     manufacturer: device.manufacturer,
-                    entities: device.entities
+                    entities: device.entities,
+                    decoders: device.decoders
                 };
             });
 

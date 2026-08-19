@@ -12,6 +12,8 @@ from typing import Optional
 
 import requests
 
+import mi_decode
+
 logger = logging.getLogger(__name__)
 
 # 角色 -> 中文名，前端展示用
@@ -24,6 +26,9 @@ ROLE_LABELS = {
     "frequency": "频率",
     "apparent_power": "视在功率",
     "switch": "开关",
+    # 下面两个只会由小米打包寄存器解码得到，没有独立实体
+    "today_energy": "今日电量",
+    "month_energy": "本月电量",
 }
 
 # 采集时会写入状态的数值角色
@@ -418,12 +423,18 @@ def discover_devices(client: HAClient, states: Optional[list] = None) -> list:
         states = client.get_states()
 
     candidates = {}
+    packed = {}
     for item in states or []:
         role = classify_entity(item)
         if role:
             candidates[item.get("entity_id")] = (role, item)
+        elif mi_decode.looks_like_packed(item):
+            # 小米插座把多项数据塞进一个大整数里，单独收集起来后面解码
+            packed[item.get("entity_id")] = item
 
-    device_map = _device_map_via_template(client, sorted(candidates.keys()))
+    device_map = _device_map_via_template(
+        client, sorted(candidates.keys()) + sorted(packed.keys())
+    )
 
     groups = {}
     for entity_id, (role, item) in candidates.items():
@@ -443,10 +454,29 @@ def discover_devices(client: HAClient, states: Optional[list] = None) -> list:
             "manufacturer": info.get("manufacturer") or "",
             "source": source,
             "members": [],
+            "packed": [],
         })
         group["members"].append((role, item))
         if not group["name"] and info.get("name"):
             group["name"] = info["name"]
+
+    for entity_id, item in packed.items():
+        info = device_map.get(entity_id)
+        if not info:
+            # 拿不到设备归属的打包寄存器无从判断属于哪台插座，跳过
+            continue
+        group = groups.get(info["device_id"])
+        if group is None:
+            group = groups.setdefault(info["device_id"], {
+                "key": info["device_id"],
+                "name": info.get("name") or "",
+                "model": info.get("model") or "",
+                "manufacturer": info.get("manufacturer") or "",
+                "source": "device",
+                "members": [],
+                "packed": [],
+            })
+        group.setdefault("packed", []).append(item)
 
     devices = []
     for group in groups.values():
@@ -456,8 +486,12 @@ def discover_devices(client: HAClient, states: Optional[list] = None) -> list:
             if best is None or _role_score(role, item) > _role_score(role, best):
                 roles[role] = item
 
-        # 既没有功率也没有电量的（比如只有电压的传感器）不算计量插座
-        if "power" not in roles and "energy" not in roles:
+        decoded = mi_decode.detect(group.get("packed") or [])
+
+        # 既没有功率也没有电量（包括解码得到的）就不算计量插座
+        has_data = "power" in roles or "energy" in roles
+        has_decoded = "power" in decoded or "today_energy" in decoded
+        if not has_data and not has_decoded:
             continue
 
         name = group["name"] or _common_name([_name_of(i) for _, i in group["members"]])
@@ -475,6 +509,22 @@ def discover_devices(client: HAClient, states: Optional[list] = None) -> list:
                 "value": role_value(role, item.get("state"), unit),
             }
 
+        # 解码值只补实体缺失的角色，真实实体优先
+        decoders = {}
+        for role, found in decoded.items():
+            if role in entities:
+                continue
+            decoders[role] = {"entity_id": found["entity_id"], "spec": found["spec"]}
+            readings[role] = {
+                "entity_id": found["entity_id"],
+                "name": found.get("source_name") or found["entity_id"],
+                "state": None,
+                "unit": found["unit"],
+                "value": found["value"],
+                "decoded": True,
+            }
+
+        role_order = ALL_ROLES + ("today_energy", "month_energy")
         devices.append({
             "key": group["key"],
             "name": (name or group["key"]).strip(),
@@ -482,8 +532,9 @@ def discover_devices(client: HAClient, states: Optional[list] = None) -> list:
             "manufacturer": group["manufacturer"],
             "source": group["source"],
             "entities": entities,
+            "decoders": decoders,
             "readings": readings,
-            "roles": [r for r in ALL_ROLES if r in entities],
+            "roles": [r for r in role_order if r in entities or r in decoders],
         })
 
     devices.sort(key=lambda d: (d["name"] or d["key"]).lower())

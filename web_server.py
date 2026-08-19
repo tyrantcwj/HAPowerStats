@@ -91,6 +91,7 @@ def _realtime_payload() -> dict:
             "manufacturer": config.get("manufacturer", ""),
             "energy_mode": config.get("energy_mode", "auto"),
             "entities": config.get("entities", {}),
+            "decoders": config.get("decoders", {}),
             "has_switch": bool((config.get("entities") or {}).get("switch")),
             "available": bool(runtime.get("available")),
             "power_w": float(runtime.get("current_power_w") or 0.0),
@@ -103,6 +104,7 @@ def _realtime_payload() -> dict:
             "frequency_hz": runtime.get("frequency_hz"),
             "switch_state": runtime.get("switch_state"),
             "energy_source": runtime.get("energy_source", "integrate"),
+            "period_source": runtime.get("period_source", "computed"),
             "last_update": runtime.get("last_update"),
         })
 
@@ -288,6 +290,27 @@ def _discover(force: bool = False, data: dict = None):
         return devices, states
 
 
+def _new_roles(discovered: dict, saved: dict) -> list:
+    """已导入的插座这次扫描又多认出哪些参数（比如新支持的小米解包）。"""
+    saved_entities = saved.get("entities") or {}
+    saved_decoders = saved.get("decoders") or {}
+    new_roles = []
+
+    for role, entity_id in (discovered.get("entities") or {}).items():
+        if saved_entities.get(role) != entity_id and not saved_decoders.get(role):
+            new_roles.append(role)
+
+    for role, decoder in (discovered.get("decoders") or {}).items():
+        if saved_entities.get(role):
+            continue
+        current = saved_decoders.get(role) or {}
+        if (current.get("entity_id"), current.get("spec")) != (decoder.get("entity_id"), decoder.get("spec")):
+            new_roles.append(role)
+
+    order = list(ha_client.ROLE_LABELS.keys())
+    return sorted(set(new_roles), key=lambda r: order.index(r) if r in order else 99)
+
+
 @app.route("/api/ha/discover", methods=["GET", "POST"])
 def discover_ha_devices():
     data = request.get_json(silent=True) or {}
@@ -301,13 +324,17 @@ def discover_ha_devices():
     result = []
     for device in devices:
         item = dict(device)
-        item["added"] = device["key"] in configured
+        saved = configured.get(device["key"])
+        item["added"] = saved is not None
+        item["new_roles"] = _new_roles(device, saved) if saved else []
+        item["needs_update"] = bool(item["new_roles"])
         result.append(item)
 
     return jsonify({
         "devices": result,
         "count": len(result),
         "added_count": sum(1 for d in result if d["added"]),
+        "update_count": sum(1 for d in result if d["needs_update"]),
         "role_labels": ha_client.ROLE_LABELS,
     })
 
@@ -371,6 +398,7 @@ def import_devices_api():
             "model": device.get("model", ""),
             "manufacturer": device.get("manufacturer", ""),
             "entities": device.get("entities", {}),
+            "decoders": device.get("decoders", {}),
             "energy_mode": "auto",
             "enabled": True,
         })

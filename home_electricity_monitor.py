@@ -25,6 +25,7 @@ from typing import Optional
 import paho.mqtt.client as mqtt
 
 import ha_client
+import mi_decode
 from config_store import (
     DATA_DIR,
     LEGACY_DEVICE_KEY,
@@ -99,6 +100,7 @@ def _empty_device_state(name: str = "") -> dict:
         "frequency_hz": None,
         "switch_state": None,
         "energy_source": "integrate",   # entity=读 HA 电量实体，integrate=功率积分
+        "period_source": "computed",    # device=插座自报今日/本月，computed=本程序统计
         "last_energy_reading": None,    # HA 电量实体上一次读数
         "available": False,
         "last_update": None,
@@ -233,20 +235,39 @@ class DeviceAccumulator:
         self.key = config["key"]
         self.name = config.get("name") or config["key"]
         self.entities = config.get("entities") or {}
+        self.decoders = config.get("decoders") or {}
         self.energy_mode = config.get("energy_mode") or "auto"
         self.state_manager = state_manager
         self.last_sample_time = 0.0
         self.last_power_w = None
 
     def _reading(self, index: dict, role: str):
+        """取某个角色的值：优先真实实体，没有就用小米打包寄存器解码。"""
         entity_id = self.entities.get(role)
-        if not entity_id:
+        if entity_id:
+            item = index.get(entity_id)
+            if not item:
+                logger.warning("[%s] 实体不存在或不可读: %s", self.name, entity_id)
+                return None
+            return ha_client.role_value(role, item.get("state"), item.get("unit"))
+        return self._decoded(index, role)
+
+    def _decoded(self, index: dict, role: str):
+        """小米插座把多项数据打包进一个大整数，这里解出来。"""
+        config = self.decoders.get(role)
+        if not config:
             return None
-        item = index.get(entity_id)
+        item = index.get(config.get("entity_id"))
         if not item:
-            logger.warning("[%s] 实体不存在或不可读: %s", self.name, entity_id)
+            logger.warning("[%s] 打包实体不存在或不可读: %s", self.name, config.get("entity_id"))
             return None
-        return ha_client.role_value(role, item.get("state"), item.get("unit"))
+        value = mi_decode.decode(config.get("spec"), item.get("state"))
+        if value is None:
+            logger.warning(
+                "[%s] 打包数据解码失败: %s = %s",
+                self.name, config.get("entity_id"), item.get("state"),
+            )
+        return value
 
     def _check_reset(self, state: dict):
         """跨天 / 跨月时把起始累计值刷新掉。"""
@@ -332,6 +353,19 @@ class DeviceAccumulator:
         state["current_power_w"] = float(power_w or 0.0)
         state["today_energy_kwh"] = max(0.0, total - float(state.get("day_start_energy_kwh") or 0))
         state["month_energy_kwh"] = max(0.0, total - float(state.get("month_start_energy_kwh") or 0))
+
+        # 插座自己就报今日/本月电量（小米打包寄存器解出来的），直接用它，
+        # 这样页面数字和米家 App 完全一致
+        reported_today = self._decoded(index, "today_energy")
+        reported_month = self._decoded(index, "month_energy")
+        if reported_today is not None or reported_month is not None:
+            if reported_today is not None:
+                state["today_energy_kwh"] = reported_today
+            if reported_month is not None:
+                state["month_energy_kwh"] = reported_month
+            state["period_source"] = "device"
+        else:
+            state["period_source"] = "computed"
         state["voltage_v"] = self._reading(index, "voltage")
         state["current_a"] = self._reading(index, "current")
         state["power_factor"] = self._reading(index, "power_factor")
